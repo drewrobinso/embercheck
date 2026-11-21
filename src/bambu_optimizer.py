@@ -20,7 +20,7 @@ from emitter import emit, validate, rewrite_m73  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.1.1'
+VERSION = '1.2.0'
 
 
 def windows_documents_dir():
@@ -228,11 +228,11 @@ def presets_cmd(a):
         else:
             frozen = getattr(sys, 'frozen', False)
             if frozen:
-                line = bp.post_process_line(sys.executable, None, a.pp_args)
+                line = bp.post_process_line(sys.executable, None, ('--goal {goal} ' + a.pp_args).strip())
             else:
                 exe = sys.executable
                 w = os.path.join(os.path.dirname(exe), 'pythonw.exe')
-                line = bp.post_process_line(w if os.path.exists(w) else exe, os.path.abspath(__file__), a.pp_args)
+                line = bp.post_process_line(w if os.path.exists(w) else exe, os.path.abspath(__file__), ('--goal {goal} ' + a.pp_args).strip())
             bp.install(line, a.bambu_dir, manifest, log, backup_dir=os.path.join(app_dir(), 'preset_backups'))
             if bp.bambu_running():
                 log('Bambu Studio is running - restart it to see the new presets.')
@@ -332,7 +332,7 @@ def main(argv=None):
     ap.add_argument('--pos', help=argparse.SUPPRESS)
     ap.add_argument('--install-presets', action='store_true', help='create "<default process> - Optimized" presets in Bambu Studio for your printers')
     ap.add_argument('--remove-presets', action='store_true', help='remove the presets created by --install-presets')
-    ap.add_argument('--pp-args', default='--goal balanced', help='arguments written into the presets\' post-processing line')
+    ap.add_argument('--pp-args', default='', help='extra arguments added to the presets\' post-processing line (each preset already has its own --goal)')
     ap.add_argument('--bambu-dir', help=argparse.SUPPRESS)
     ap.add_argument('--open-reports', action='store_true', help='open the reports folder')
     ap.add_argument('--self-test', action='store_true', help=argparse.SUPPRESS)

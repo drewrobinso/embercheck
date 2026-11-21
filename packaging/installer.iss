@@ -49,7 +49,7 @@ CloseApplications=no
 ; ProductName / ProductVersion above are enforced by the SignPath artifact configuration.
 
 [Tasks]
-Name: "presets"; Description: "Add ""- Optimized"" process presets to Bambu Studio for my printers (recommended)"
+Name: "presets"; Description: "Add AI process presets to Bambu Studio for my printers, e.g. ""0.20mm H2S AI Balanced"" (recommended)"
 Name: "startmenu"; Description: "Create Start menu shortcuts"
 
 [Files]
@@ -72,7 +72,7 @@ Type: files; Name: "{app}\presets_manifest.json"
 Type: files; Name: "{app}\presets.log"
 
 [Messages]
-FinishedLabel=Setup has installed [name] on your computer.%n%nRestart Bambu Studio, then pick a process preset ending in "- Optimized" (for example "0.20mm Standard @BBL H2S - Optimized"). Every slice with that preset is optimized automatically and a results card appears.%n%nReports are saved in Documents\BambuPrintOptimizer\reports.
+FinishedLabel=Setup has installed [name] on your computer.%n%nRestart Bambu Studio, then pick an "AI" process preset, for example "0.20mm H2S AI Balanced" (also AI Speed / AI Quality, at 0.16 / 0.20 / 0.24 mm). Every slice with it is optimized automatically and a results card appears.%n%nOlder "... - Optimized" presets were replaced; if one is synced to your Bambu account it was switched off - delete it in Bambu Studio.%n%nReports are saved in Documents\BambuPrintOptimizer\reports.
 
 [Code]
 function BambuRunning(): Boolean;

@@ -39,15 +39,21 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 2. Close Bambu Studio, then run the installer. There are two clicks: **Next** on the options page, then **Finish**.
    - It installs for your Windows user only, with no admin rights, to `%LOCALAPPDATA%\Programs\PrintOptimizer`.
    - Python, shapely and numpy are bundled. You don't need to install anything else.
-   - Option *Add "- Optimized" process presets to Bambu Studio* (on by default). For every Bambu Lab printer you added in Bambu Studio, it creates a copy of that printer's default process preset with the optimizer set as its post-processing script, for example `0.20mm Standard @BBL H2S - Optimized`. The preset **inherits** the system preset, so you still get Bambu's preset updates. It is written into **every** Bambu Studio user folder: `%APPDATA%\BambuStudio\user\<account id>\process\` for each signed-in account, `user\default\` (signed out), and the active folder named in `BambuStudio.conf` (`preset_folder`). Bambu Studio only loads the folder of the account you are signed in with.
-     - A same-named preset from an older manual setup is upgraded in place. That means one whose post-processing line already points at `bambu_optimizer.py` or `PrintOptimizer`. The installer keeps its settings, switches it to the installed exe, and saves a backup in `%LOCALAPPDATA%\Programs\PrintOptimizer\preset_backups\`.
-     - Cloud-synced presets keep their Bambu cloud id and are marked for upload, so the change syncs.
-     - Any other preset, including an unrelated one with the same name, is never changed.
+   - Option *Add AI process presets to Bambu Studio* (on by default). For every Bambu Lab printer you added in Bambu Studio, it creates presets named `<layer>mm <printer> AI <Goal>`. Each one **inherits** the matching system process preset (so you keep getting Bambu's updates) and runs the optimizer with that goal.
+     - Layer heights: the main system layer heights only (Standard / Optimal / Fine / Draft, not High Quality, Strength and similar variants), at most 3 per printer and nozzle: the printer's default layer height and its nearest neighbours.
+     - Goals: `Balanced`, `Speed` and `Quality` (`--goal balanced/speed/quality`).
+     - For an **H2S with a 0.4 nozzle** that is 9 presets: `0.16mm H2S AI Balanced`, `0.16mm H2S AI Speed`, `0.16mm H2S AI Quality`, `0.20mm H2S AI Balanced`, `0.20mm H2S AI Speed`, `0.20mm H2S AI Quality`, `0.24mm H2S AI Balanced`, `0.24mm H2S AI Speed`, `0.24mm H2S AI Quality` (based on `0.16/0.20/0.24mm Standard @BBL H2S`).
+     - Nozzles other than 0.4 mm get the size in the name, for example `0.30mm H2S 0.6 AI Balanced`. The X1 Carbon is shortened to `X1C`.
+     - The presets are written into **every** Bambu Studio user folder: `%APPDATA%\BambuStudio\user\<account id>\process\` for each signed-in account, `user\default\` (signed out), and the active folder named in `BambuStudio.conf` (`preset_folder`). Bambu Studio only loads the folder of the account you are signed in with.
+     - Presets this tool already created are updated in place. Your own tweaks and the Bambu cloud id are kept, and the preset is marked for upload. A preset of yours that happens to have the same name is never changed.
+     - **Upgrading from 1.0/1.1:** the old `... - Optimized` presets (marked ones, or older manual ones whose post-processing line points at `bambu_optimizer.py` / `PrintOptimizer`) are backed up to `%LOCALAPPDATA%\Programs\PrintOptimizer\preset_backups\`, then retired.
+       - If the old preset isn't synced to the cloud, it is deleted.
+       - If it is synced to your Bambu account, its post-processing line is cleared and a note is added. Bambu Studio can delete a cloud preset only through its own Delete command; a cloud preset deleted on disk is downloaded again at the next sync. **Delete it in Bambu Studio** (select it → Delete).
    - Start menu: **Print Optimizer** (pick a sliced `.gcode.3mf` and optimize it by hand) and **Print Optimizer reports** (opens the reports folder).
-3. Start Bambu Studio, pick the `... - Optimized` process preset, and slice as usual.
+3. Start Bambu Studio, pick an AI preset such as `0.20mm H2S AI Balanced`, and slice as usual.
 
 **Uninstall:** Windows Settings → Apps → *Bambu Print Optimizer* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
-- `- Optimized` presets that belong to this tool are deleted.
+- The `... AI <Goal>` presets (and any old `... - Optimized` ones) that belong to this tool are deleted.
 - Presets that are synced to your Bambu cloud account are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
 - Your reports in `Documents\BambuPrintOptimizer` and the preset backups are kept.
 
@@ -79,12 +85,13 @@ These points were checked in the Bambu Studio source and the 02.09.01.70 binary.
   ```
   "C:\Users\<you>\AppData\Local\Programs\PrintOptimizer\PrintOptimizer.exe" --goal balanced
   ```
+  (`--goal speed` / `--goal quality` for the AI Speed / AI Quality presets).
 - On Windows, Bambu starts it with `CreateProcessW`, then `WaitForSingleObject(INFINITE)` and `GetExitCodeProcess`. Slicing waits until the optimizer exits.
   - Bambu does **not** hide the console window (that code is `#if 0` in the source). That is why the tool ships as a windowed exe (or use `pythonw.exe` with the Python version below).
 - The script edits the file in place. Bambu re-loads the preview from it, and the plate file you Print / Send / Export is packaged from it.
 - **Bambu's own time/filament estimate stays from the original slice.** The optimizer updates the `M73` remaining-time values the printer shows, and the results card and report show its own before/after model times.
 - Exit code: it always exits 0 (also on Cancel or an internal error, which leaves the G-code untouched) unless you add `--strict`.
-- The preset can be edited like any other preset. For example, change the arguments to `--goal quality` or add `--reorder --fix-strings`.
+- The presets can be edited like any other preset. For example, add `--reorder --fix-strings` to the post-processing line.
 
 ## Without the installer (Python version)
 
@@ -116,7 +123,7 @@ Use `BambuPrintOptimizer-<version>-python.zip`. It is flat: the files sit at the
 | `--keep-original` | Save a copy of the un-optimized G-code next to the report. |
 | `--report-dir DIR` | Folder for reports. |
 | `--strict` | Return an error on failure (Bambu then shows a message). |
-| `--install-presets` / `--remove-presets` | Create / remove the `- Optimized` Bambu Studio presets. `--pp-args "..."` sets the arguments written into them. |
+| `--install-presets` / `--remove-presets` | Create / remove the `... AI <Goal>` Bambu Studio presets. `--pp-args "..."` adds extra arguments to their post-processing line, after their own `--goal`. |
 | `--open-reports` | Open the reports folder. |
 
 ## How the thermal model works, and its limits compared with Helio (please read)
@@ -195,7 +202,7 @@ SignPath one-time setup:
 
 - `src/bambu_optimizer.py`: CLI / post-processing entry point (.gcode and .gcode.3mf), GUI flow, presets and Start-menu modes
 - `src/ui.py`, `src/progress.py`: progress window and results card (tkinter), staged progress reporting with cancel
-- `src/bambu_presets.py`: creates and removes the Bambu Studio `- Optimized` presets
+- `src/bambu_presets.py`: creates, migrates and removes the Bambu Studio `... AI <Goal>` presets
 - `src/gcode_model.py`: G-code parser, protected-block detection, motion-time estimator
 - `src/optimizer.py`: geometry (islands, overhangs), thermal model, speed/fan plan, travel/stringing, island re-ordering
 - `src/emitter.py`: writes the new G-code, updates M73, runs the safety validation
