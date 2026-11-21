@@ -43,12 +43,63 @@ def _win_tweaks(root):
 
 
 def _dpi_aware():
+    """Per-monitor DPI awareness on Windows so Tk gets real pixels (sharp text, correct sizes) instead of a
+    bitmap-stretched 96-dpi window. Must run before the first Tk() is created."""
     if sys.platform == 'win32':
+        import ctypes
+        for fn in (lambda: ctypes.windll.shcore.SetProcessDpiAwareness(2),   # per-monitor (8.1+)
+                   lambda: ctypes.windll.shcore.SetProcessDpiAwareness(1),   # system
+                   lambda: ctypes.windll.user32.SetProcessDPIAware()):       # Vista+
+            try:
+                fn(); break
+            except Exception:
+                continue
+
+
+def _setup_scaling(root):
+    """Returns px(n): n design pixels (at 100 % / 96 dpi) -> real pixels. Fonts are given in points, which Tk already
+    scales with `tk scaling`; every pixel size (widths, padding, wrap lengths, canvases) goes through px().
+    PO_TK_SCALING=<factor> simulates Windows display scaling (1.0 = 100 %, 1.5 = 150 %) for tests."""
+    sim = os.environ.get('PO_TK_SCALING')
+    if sim:
         try:
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(1)
+            root.tk.call('tk', 'scaling', 96.0 * float(sim) / 72.0)
         except Exception:
             pass
+    try:
+        f = root.winfo_fpixels('1i') / 96.0
+    except Exception:
+        f = 1.0
+    f = max(1.0, min(f, 4.0))
+    return lambda n: int(round(n * f)), f
+
+
+def _shot_hook(root, buttons, tag):
+    """Test hook: PO_UI_SHOT=<file.png> saves a screenshot of the window and a JSON with the geometry check
+    (every button fully inside the window and the window inside the screen), then closes the window."""
+    path = os.environ.get('PO_UI_SHOT')
+    if not path:
+        return
+    def go():
+        root.update_idletasks(); root.update()
+        x, y, w, h = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width(), root.winfo_height()
+        res = {'tag': tag, 'window': [x, y, w, h], 'screen': [root.winfo_screenwidth(), root.winfo_screenheight()],
+               'scaling': os.environ.get('PO_TK_SCALING'), 'buttons': []}
+        ok = y + h <= root.winfo_screenheight() and x + w <= root.winfo_screenwidth() and x >= 0 and y >= 0
+        for b in buttons:
+            bx, by, bw, bh = b.winfo_rootx(), b.winfo_rooty(), b.winfo_width(), b.winfo_height()
+            inside = bx >= x and by >= y and bx + bw <= x + w and by + bh <= y + h and b.winfo_ismapped() and bh > 4
+            res['buttons'].append([bx, by, bw, bh, inside]); ok = ok and inside
+        res['ok'] = ok
+        try:
+            from PIL import ImageGrab
+            ImageGrab.grab(bbox=(x, y, x + w, y + h), xdisplay=os.environ.get('DISPLAY')).save(path)
+        except Exception as ex:
+            res['shot_error'] = str(ex)
+        with open(path + '.json', 'w') as f:
+            json.dump(res, f)
+        root.destroy()
+    root.after(int(os.environ.get('PO_UI_SHOT_MS', '1200')), go)
 
 
 def _round_rect(cv, x0, y0, x1, y1, r, **kw):
@@ -61,7 +112,14 @@ def _round_rect(cv, x0, y0, x1, y1, r, **kw):
 class RoundButton:
     def __init__(self, parent, text, command, primary=False, width=150, height=34, font=None, bg=BG):
         import tkinter as tk
+        import tkinter.font as tkfont
         self.cmd = command; self.primary = primary
+        try:
+            fo = tkfont.Font(root=parent, font=font) if font else tkfont.nametofont('TkDefaultFont')
+            width = max(width, fo.measure(text) + int(fo.metrics('linespace') * 1.6))
+            height = max(height, int(fo.metrics('linespace') * 1.9))
+        except Exception:
+            pass
         self.cv = tk.Canvas(parent, width=width, height=height, bg=bg, highlightthickness=0, bd=0, cursor='hand2')
         self.base = GREEN if primary else CARD
         self.hover = GREEN_HI if primary else LINE
@@ -94,12 +152,20 @@ class ProgressBar:
         self.bar = _round_rect(self.cv, 0, 0, x1, self.h, self.h / 2, fill=GREEN, outline='')
 
 
+def _usable_height(root):
+    """Screen height minus a taskbar allowance (Tk cannot see the work area on every platform)."""
+    return root.winfo_screenheight() - int(root.winfo_fpixels('1i') * 0.6)
+
+
 def _center(root, w, h, pos=None):
     root.update_idletasks()
+    sw, sh = root.winfo_screenwidth(), _usable_height(root)
+    w = min(w, sw); h = min(h, sh)
     if pos:
         x, y = pos
     else:
-        x = (root.winfo_screenwidth() - w) // 2; y = (root.winfo_screenheight() - h) // 2
+        x = (sw - w) // 2; y = (sh - h) // 2
+    x = max(0, min(x, sw - w)); y = max(0, min(y, sh - h))
     root.geometry('%dx%d+%d+%d' % (w, h, x, y))
 
 
@@ -120,28 +186,38 @@ class ProgressWindow:
         self.q = queue.Queue(); self.cancel = threading.Event(); self.out = {}
         root = self.root = tk.Tk()
         root.title('Print Optimizer'); root.configure(bg=BG); root.resizable(False, False)
+        root.withdraw()
         root.attributes('-topmost', True)
-        _center(root, self.W, self.H)
+        px, self.scale = _setup_scaling(root)
+        W = px(self.W)
         ff = _font_family()
         f_title = (ff, 13, 'bold'); f_txt = (ff, 10); f_small = (ff, 9)
-        top = tk.Frame(root, bg=BG); top.pack(fill='x', padx=22, pady=(18, 0))
-        dot = tk.Canvas(top, width=12, height=12, bg=BG, highlightthickness=0); dot.pack(side='left', pady=(3, 0))
-        dot.create_oval(1, 1, 11, 11, fill=GREEN, outline='')
-        tk.Label(top, text='Print Optimizer', bg=BG, fg=FG, font=f_title).pack(side='left', padx=(8, 0))
-        self.pct = tk.Label(top, text='0%', bg=BG, fg=GREEN, font=f_title); self.pct.pack(side='right')
-        self.sub = tk.Label(root, text=self.title_file, bg=BG, fg=DIM, font=f_small, anchor='w')
-        self.sub.pack(fill='x', padx=22, pady=(2, 10))
-        self.bar = ProgressBar(root, width=self.W - 44); self.bar.cv.pack(padx=22)
-        mid = tk.Frame(root, bg=BG); mid.pack(fill='x', padx=22, pady=(10, 0))
-        self.stage = tk.Label(mid, text='Starting…', bg=BG, fg=FG, font=f_txt, anchor='w'); self.stage.pack(side='left')
-        self.elapsed = tk.Label(mid, text='0:00', bg=BG, fg=DIM, font=f_small); self.elapsed.pack(side='right')
-        self.steps = tk.Label(root, text=self._steps_text(None), bg=BG, fg=DIM, font=(ff, 8), anchor='w')
-        self.steps.pack(fill='x', padx=22, pady=(4, 0))
-        bot = tk.Frame(root, bg=BG); bot.pack(fill='x', padx=22, pady=(12, 14), side='bottom')
-        self.btn = RoundButton(bot, 'Cancel', self._cancel, width=110, height=30, font=f_txt).pack(side='right')
+        P = px(22)
+        top = tk.Frame(root, bg=BG); top.pack(fill='x', padx=P, pady=(px(18), 0))
+        # bottom row is packed before the middle so it always keeps its space
+        bot = tk.Frame(root, bg=BG); bot.pack(fill='x', padx=P, pady=(px(12), px(14)), side='bottom')
+        self.btn = RoundButton(bot, 'Cancel', self._cancel, width=px(110), height=px(30), font=f_txt).pack(side='right')
         tk.Label(bot, text='Cancel keeps the original G-code', bg=BG, fg=DIM, font=f_small).pack(side='left')
+        d = px(12)
+        dot = tk.Canvas(top, width=d, height=d, bg=BG, highlightthickness=0); dot.pack(side='left', pady=(px(3), 0))
+        dot.create_oval(1, 1, d - 1, d - 1, fill=GREEN, outline='')
+        tk.Label(top, text='Print Optimizer', bg=BG, fg=FG, font=f_title).pack(side='left', padx=(px(8), 0))
+        self.pct = tk.Label(top, text='0%', bg=BG, fg=GREEN, font=f_title); self.pct.pack(side='right')
+        self.sub = tk.Label(root, text=self.title_file, bg=BG, fg=DIM, font=f_small, anchor='w', justify='left',
+                            wraplength=W - 2 * P)
+        self.sub.pack(fill='x', padx=P, pady=(px(2), px(10)))
+        self.bar = ProgressBar(root, width=W - 2 * P, height=px(10)); self.bar.cv.pack(padx=P)
+        mid = tk.Frame(root, bg=BG); mid.pack(fill='x', padx=P, pady=(px(10), 0))
+        self.elapsed = tk.Label(mid, text='0:00', bg=BG, fg=DIM, font=f_small); self.elapsed.pack(side='right')
+        self.stage = tk.Label(mid, text='Starting…', bg=BG, fg=FG, font=f_txt, anchor='w'); self.stage.pack(side='left')
+        self.steps = tk.Label(root, text=self._steps_text(None), bg=BG, fg=DIM, font=(ff, 8), anchor='w')
+        self.steps.pack(fill='x', padx=P, pady=(px(4), 0))
+        root.update_idletasks()
+        _center(root, W, root.winfo_reqheight())
+        root.deiconify()
         root.protocol('WM_DELETE_WINDOW', self._cancel)
         _win_tweaks(root)
+        _shot_hook(root, [self.btn.cv], 'progress')
         self.t0 = time.time()
 
         def worker():
@@ -195,6 +271,11 @@ class ProgressWindow:
 
 
 # ----------------------------------------------------------------------------------- results card
+def _fmt_s(sec):
+    sec = abs(sec)
+    return '%d s' % round(sec) if sec < 90 else ('%d min' % round(sec / 60) if sec < 5400 else '%.1f h' % (sec / 3600))
+
+
 def _strip(s):
     s = re.sub(r'<[^>]+>', '', s)
     return _html.unescape(s)
@@ -206,28 +287,34 @@ def show_summary(path, auto_close=60, pos=None):
     with open(path, encoding='utf-8') as f:
         d = json.load(f)
     root = tk.Tk(); root.title('Print Optimizer'); root.configure(bg=BG); root.resizable(False, False)
-    W, H = 460, 470
-    if pos:
-        pos = (max(0, pos[0] - 10), max(0, pos[1] - 120))
-    _center(root, W, H, pos)
+    root.withdraw()
+    px, scale = _setup_scaling(root)
+    W = px(470); P = px(22)
+    WRAP = W - 2 * P
     root.attributes('-topmost', True)
     root.after(1500, lambda: root.attributes('-topmost', False))
     ff = _font_family()
-    f_title = (ff, 13, 'bold'); f_big = (ff, 18, 'bold'); f_txt = (ff, 10); f_small = (ff, 9); f_bold = (ff, 10, 'bold')
+    f_title = (ff, 13, 'bold'); f_txt = (ff, 10); f_small = (ff, 9); f_bold = (ff, 10, 'bold'); f_tile = (ff, 14, 'bold')
     status = d.get('status', 'optimized')
     col, label = {'optimized': (GREEN, 'Optimized'), 'nochange': (DIM, 'No changes needed'),
                   'failed': (AMBER, 'Check failed — G-code left unchanged'),
                   'dryrun': (DIM, 'Report only (dry run)')}.get(status, (DIM, status))
-    top = tk.Frame(root, bg=BG); top.pack(fill='x', padx=22, pady=(18, 0))
-    dot = tk.Canvas(top, width=12, height=12, bg=BG, highlightthickness=0); dot.pack(side='left', pady=(3, 0))
-    dot.create_oval(1, 1, 11, 11, fill=col, outline='')
-    tk.Label(top, text=label, bg=BG, fg=FG, font=f_title).pack(side='left', padx=(8, 0))
-    tk.Label(root, text=d.get('name', ''), bg=BG, fg=DIM, font=f_small, anchor='w').pack(fill='x', padx=22, pady=(2, 10))
+    goal = d.get('goal')
+    top = tk.Frame(root, bg=BG); top.pack(fill='x', padx=P, pady=(px(18), 0))
+    # 1) the button row is packed FIRST (side=bottom), so it always gets its space, whatever the text above needs
+    bot = tk.Frame(root, bg=BG); bot.pack(fill='x', padx=P, pady=(px(8), px(16)), side='bottom')
+    tk.Frame(root, bg=LINE, height=max(1, px(1))).pack(fill='x', padx=P, side='bottom')
+    dd = px(12)
+    dot = tk.Canvas(top, width=dd, height=dd, bg=BG, highlightthickness=0); dot.pack(side='left', pady=(px(3), 0))
+    dot.create_oval(1, 1, dd - 1, dd - 1, fill=col, outline='')
+    tk.Label(top, text=label, bg=BG, fg=FG, font=f_title).pack(side='left', padx=(px(8), 0))
+    tk.Label(root, text=d.get('name', '') + ('  ·  %s goal' % goal.capitalize() if goal else ''), bg=BG, fg=DIM, font=f_small, anchor='w', justify='left',
+             wraplength=WRAP).pack(fill='x', padx=P, pady=(px(2), px(10)))
 
     # stat tiles
     grid = tk.Frame(root, bg=BG)
     if 'dt_pct' in d:   # no stats when the run crashed before analysis finished
-        grid.pack(fill='x', padx=18)
+        grid.pack(fill='x', padx=P - px(4))
     dt = d.get('dt_pct', 0.0)
     tiles = [
         ('Print time', '%+.1f%%' % dt, GREEN if dt < -0.05 else (FG if abs(dt) <= 0.05 else AMBER)),
@@ -237,29 +324,47 @@ def show_summary(path, auto_close=60, pos=None):
         ('Open-air travels', str(d.get('open_air', 0)), FG),
         ('Un-retracted', str(d.get('open_air_unretracted', 0)), AMBER if d.get('open_air_unretracted', 0) else FG),
     ]
+    tw = (WRAP + px(8)) // 3 - px(8); th = px(58)
     for i, (k, v, c) in enumerate(tiles):
-        cell = tk.Frame(grid, bg=BG); cell.grid(row=i // 3, column=i % 3, padx=4, pady=4, sticky='nsew')
-        cv = tk.Canvas(cell, width=134, height=58, bg=BG, highlightthickness=0); cv.pack()
-        _round_rect(cv, 1, 1, 133, 57, 10, fill=CARD, outline='')
-        cv.create_text(12, 17, text=k, fill=DIM, font=f_small, anchor='w')
-        cv.create_text(12, 39, text=v, fill=c, font=(ff, 14, 'bold'), anchor='w')
+        cell = tk.Frame(grid, bg=BG); cell.grid(row=i // 3, column=i % 3, padx=px(4), pady=px(4), sticky='nsew')
+        cv = tk.Canvas(cell, width=tw, height=th, bg=BG, highlightthickness=0); cv.pack()
+        _round_rect(cv, 1, 1, tw - 1, th - 1, px(10), fill=CARD, outline='')
+        cv.create_text(px(12), int(th * 0.29), text=k, fill=DIM, font=f_small, anchor='w')
+        cv.create_text(px(12), int(th * 0.67), text=v, fill=c, font=f_tile, anchor='w')
+    info = []
+    if d.get('acc_saved_s'):
+        info.append('Faster acceleration on infill/inner walls saved %s (%.1f%%)' % (_fmt_s(d['acc_saved_s']), d.get('acc_saved_pct', 0.0)))
     if d.get('bambu_time'):
-        tk.Label(root, text='Slicer estimate %s · time change is from the optimizer\'s motion model' % d['bambu_time'],
-                 bg=BG, fg=DIM, font=f_small, anchor='w', justify='left', wraplength=W - 44).pack(fill='x', padx=22, pady=(4, 0))
+        info.append('Slicer estimate %s · time change is from the optimizer\'s motion model' % d['bambu_time'])
+    if info:
+        tk.Label(root, text='\n'.join(info), bg=BG, fg=DIM, font=f_small, anchor='w', justify='left',
+                 wraplength=WRAP).pack(fill='x', padx=P, pady=(px(4), 0))
+    tk.Label(root, text='Details' if status == 'failed' else 'Recommendations', bg=BG, fg=FG, font=f_bold,
+             anchor='w').pack(fill='x', padx=P, pady=(px(12), px(4)))
+
+    # 2) recommendations / failure details: full text, wrapped, in a height-limited scrollable region
+    items = []
     if status == 'failed' and d.get('errors'):
-        tk.Label(root, text='Reason: ' + '; '.join(d['errors'])[:160], bg=BG, fg=AMBER, font=f_small, anchor='w',
-                 justify='left', wraplength=W - 44).pack(fill='x', padx=22, pady=(6, 0))
-    tk.Label(root, text='Details' if status == 'failed' else 'Recommendations', bg=BG, fg=FG, font=f_bold, anchor='w').pack(fill='x', padx=22, pady=(12, 4))
-    recs = d.get('recommendations') or []
-    box = tk.Frame(root, bg=BG); box.pack(fill='both', expand=True, padx=22)
-    for area, text in recs[:3]:
-        row = tk.Frame(box, bg=BG); row.pack(fill='x', pady=2)
-        tk.Label(row, text='●', bg=BG, fg=GREEN, font=f_small).pack(side='left', anchor='n', padx=(0, 6))
-        t = _strip(text)
-        if len(t) > 170: t = t[:167].rsplit(' ', 1)[0] + '…'
-        tk.Label(row, text='%s: %s' % (area, t), bg=BG, fg=FG, font=f_small, justify='left', anchor='w',
-                 wraplength=W - 70).pack(side='left', fill='x')
-    bot = tk.Frame(root, bg=BG); bot.pack(fill='x', padx=22, pady=(8, 16), side='bottom')
+        items += [('Reason', e, AMBER) for e in d['errors']]
+    items += [(area, _strip(text), GREEN) for area, text in (d.get('recommendations') or [])]
+    if not items:
+        items = [('Slicer settings', 'Nothing important to change in the slicer for this print.', GREEN)]
+    wrap_box = tk.Frame(root, bg=BG); wrap_box.pack(fill='both', expand=True, padx=P, pady=(0, px(6)))
+    sb = tk.Scrollbar(wrap_box, orient='vertical')
+    cvs = tk.Canvas(wrap_box, bg=BG, highlightthickness=0, bd=0, yscrollcommand=sb.set, width=WRAP)
+    sb.config(command=cvs.yview)
+    cvs.pack(side='left', fill='both', expand=True)
+    inner = tk.Frame(cvs, bg=BG)
+    cvs.create_window(0, 0, window=inner, anchor='nw')
+    bullet_w = px(16); text_w = WRAP - bullet_w - px(18)   # room for the scrollbar if it is needed
+    for area, text, bc in items:
+        row = tk.Frame(inner, bg=BG); row.pack(fill='x', pady=px(2), anchor='w')
+        tk.Label(row, text='●', bg=BG, fg=bc, font=f_small, width=2, anchor='n').pack(side='left', anchor='n')
+        tk.Label(row, text='%s: %s' % (area, text), bg=BG, fg=FG, font=f_small, justify='left', anchor='w',
+                 wraplength=text_w).pack(side='left', fill='x')
+    inner.update_idletasks()
+    rec_h = inner.winfo_reqheight()
+
     cd = tk.Label(bot, text='', bg=BG, fg=DIM, font=f_small); cd.pack(side='left')
     state = {'left': auto_close, 'active': auto_close > 0}
 
@@ -277,9 +382,32 @@ def show_summary(path, auto_close=60, pos=None):
                 webbrowser.open('file://' + os.path.abspath(rp))
         state['active'] = False; cd.config(text='')
 
-    RoundButton(bot, 'Close', close, width=90, height=32, font=f_txt).pack(side='right')
-    tk.Frame(bot, bg=BG, width=8).pack(side='right')
-    RoundButton(bot, 'Open full report' if d.get('report') else 'Open log folder', open_report, primary=True, width=150, height=32, font=f_bold).pack(side='right')
+    b_close = RoundButton(bot, 'Close', close, width=px(90), height=px(32), font=f_txt).pack(side='right')
+    tk.Frame(bot, bg=BG, width=px(8)).pack(side='right')
+    b_open = RoundButton(bot, 'Open full report' if d.get('report') else 'Open log folder', open_report, primary=True,
+                         width=px(150), height=px(32), font=f_bold).pack(side='right')
+
+    # 3) size the window from what it actually needs, capped to the screen; the list scrolls if it must
+    cvs.config(height=rec_h)
+    root.update_idletasks()
+    need = root.winfo_reqheight()
+    cap = _usable_height(root) - px(10)
+    if need > cap:
+        cvs.config(height=max(px(60), rec_h - (need - cap)))
+        sb.pack(side='right', fill='y')
+        root.update_idletasks()
+        need = min(root.winfo_reqheight(), cap)
+    cvs.config(scrollregion=(0, 0, WRAP, rec_h))
+    def wheel(e):
+        if sb.winfo_ismapped():
+            cvs.yview_scroll(-1 if (getattr(e, 'delta', 0) > 0 or getattr(e, 'num', 0) == 4) else 1, 'units')
+    for w in (root,):
+        w.bind_all('<MouseWheel>', wheel); w.bind_all('<Button-4>', wheel); w.bind_all('<Button-5>', wheel)
+    if pos:
+        pos = (max(0, pos[0] - px(10)), max(0, pos[1] - px(120)))
+    _center(root, max(W, root.winfo_reqwidth()), need, pos)
+    root.deiconify()
+    _shot_hook(root, [b_open.cv, b_close.cv], 'summary-' + status)
 
     def stop_timer(_e=None):
         if state['active']:

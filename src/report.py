@@ -91,10 +91,21 @@ def time_breakdown(opt):
         elif t: cat['Dwell / waits'] += t
     return cat, flow_lim, ext_t
 
+def _layer_list(ks, n=8):
+    ks = list(ks); s = ', '.join(str(k) for k in ks[:n])
+    return s + (' and %d more' % (len(ks) - n) if len(ks) > n else '')
+
+
 def recommendations(opt, summary):
     g = opt.g; c = g.cfg; recs = []
     mat = opt.mat_name
     hot = summary['hot_before']; cold = summary['cold_before']
+    goal = summary.get('goal'); left = summary.get('hot_after', 0)
+    if goal in ('speed', 'balanced') and left and summary.get('budget_kept_hot'):
+        recs.append(('Goal', '%s goal keeps print time %s, so %d layers predicted too hot were left as they are (layers %s). Use the <b>%s</b> preset for this print to fix them, or apply the cooling settings below.' % (
+            goal.capitalize(), 'at or below the original' if goal == 'speed' else 'within +2%', left,
+            _layer_list([i + 1 for i, e in enumerate(opt.opt) if e.Tmax is not None and e.Tmax > opt.mat['t_high']]),
+            'AI Balanced or AI Quality' if goal == 'speed' else 'AI Quality')))
     if hot:
         need = summary.get('hot_layer_time_needed')
         recs.append(('Cooling / min layer time', 'Bambu Studio &rsaquo; Filament &rsaquo; Cooling: <b>Slow printing down for better layer cooling</b> (slow_down_layer_time) is %gs. %d layers are predicted too hot. Raising it%s, printing 2+ copies at once, or adding a sacrificial "cooling tower" next to small parts fixes this at the source.' % (
@@ -158,6 +169,12 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
                      ('Slicer time estimate', html.escape(k['bambu_time'] or 'n/a')),
                      ('Our model: before', fmt_t(k['t_before'])), ('Our model: after', fmt_t(k['t_after'])),
                      ('Time change', '%+.1f%% (%s)' % (k['dt_pct'], ('-' if k['t_after'] < k['t_before'] else '+') + fmt_t(abs(k['t_before'] - k['t_after'])))),
+                     ('Of which acceleration', '-%s (%.1f%%, %d layers, up to %d mm/s&sup2;)' % (
+                         fmt_t(k.get('acc_saved_s', 0.0)), k.get('acc_saved_pct', 0.0), k.get('acc_layers', 0), k.get('acc_target_max', 0))
+                      if k.get('acc_saved_s') else 'unchanged'),
+                     ('Goal', html.escape((k.get('goal') or '?').capitalize()) + (
+                         ' (limit: not slower)' if k.get('time_budget_pct') == 0 else
+                         (' (limit: +%g%%)' % k['time_budget_pct'] if k.get('time_budget_pct') else ' (no time limit)'))),
                      ('Hot layers', '%d &rarr; %d' % (k['hot_before'], k['hot_after'])),
                      ('Cold layers', '%d &rarr; %d%s' % (k['cold_before'], k['cold_after'], '' if opt.mat['cold_matters'] else ' (info)'))]:
         o.append('<div>%s<b>%s</b></div>' % (lab, val))

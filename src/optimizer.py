@@ -41,15 +41,33 @@ class Settings:
         self.reorder = False
         self.fix_strings = False
         self.m73 = True
-        self.margin = 3.0               # deg C safety margin inside window
+        self.margin = None              # deg C safety margin inside window (None -> goal default)
+        self.accel = True               # speed-aware acceleration on internal features
+        self.time_budget = 'goal'       # max print-time increase as a fraction; 'goal' -> goal default, None = no limit
         self.__dict__.update({k: v for k, v in kw.items() if v is not None})
         if self.max_speedup is None:
             self.max_speedup = {'quality': 1.0, 'balanced': 1.25, 'speed': 1.5}[self.goal]
+        if self.margin is None:
+            self.margin = 5.0 if self.goal == 'quality' else 3.0
+        if self.time_budget == 'none':
+            self.time_budget = None
+        if self.time_budget == 'goal':
+            # speed: never slower than the slicer; balanced: at most +2 %; quality: no limit
+            self.time_budget = {'speed': 0.0, 'balanced': 0.02, 'quality': None}[self.goal]
+
+
+# Speed-aware acceleration (M204) per Bambu ;FEATURE: type. Visible / delicate features (outer wall, overhangs,
+# bridges, top surface, first layers) always keep the slicer's acceleration.
+ACCEL_FEATURES = {'speed': {'Sparse infill', 'Internal solid infill', 'Inner wall'},
+                  'balanced': {'Sparse infill', 'Internal solid infill', 'Inner wall'},
+                  'quality': {'Sparse infill', 'Internal solid infill'}}
+ACCEL_FACTOR = {'speed': None, 'balanced': 1.5, 'quality': 1.2}   # None -> up to the machine maximum
+ACCEL_MIN_LAYER = 3
 
 
 class LayerEval:
     __slots__ = ('time', 'Tmax', 'Tmin', 'Tmean', 'cold_frac', 'hot_frac', 'isl', 'feeds', 'fanpol', 's',
-                 'tstart', 'fan_avg')
+                 'tstart', 'fan_avg', 'acc')
 
 
 class Optimizer:
@@ -192,7 +210,7 @@ class Optimizer:
                 bucket = 2 if ov < 0.5 else (3 if ov < 0.75 else 4)
                 self.ov_stats['b%d' % bucket] += 1
                 self.ov_info[ln.i] = ov
-                if not self.st.overhang or bucket == 2: continue   # 25-50 %: report only
+                if not self.st.overhang or (bucket == 2 and self.st.goal != 'quality'): continue   # 25-50 %: quality only
                 F = ln.effF
                 v = sp[bucket] if sp[bucket] else None
                 if v is None:
@@ -233,6 +251,39 @@ class Optimizer:
                 flush(); run = []; key = None
         flush()
 
+    def plan_accel(self):
+        """line idx -> raised M204 acceleration for internal features (only used on layers whose plan has acc=True).
+        Travels/retracts between two raised extrusions of the same feature run at the same original accel are raised
+        too, so we do not toggle M204 around every hop; anything the slicer set differently (short-travel 250 mm/s2,
+        protected AMS/tool-change blocks, other features) keeps its own value."""
+        self.accplan = {}
+        self.acc_target_max = 0
+        if not (self.st.accel and self.st.speed): return
+        feats = ACCEL_FEATURES[self.st.goal]; fac = ACCEL_FACTOR[self.st.goal]; amax = self.kin.amax
+        def target(a):
+            t = amax if fac is None else min(amax, a * fac)
+            return t if t > a + 1 else None
+        for k in range(ACCEL_MIN_LAYER, self.nl):
+            pend = []; last = None   # last = (feature, orig accel, target) of the previous raised extrusion
+            for ln in self.L[k]['lines']:
+                if ln.kind != 'motion': continue
+                if not ln.opt or ln.layer < 0 or not ln.accel:
+                    pend = []; last = None; continue
+                if ln.is_ext:
+                    t = target(ln.accel) if ln.feature in feats else None
+                    if t is not None:
+                        if last is not None and last[0] == ln.feature and last[1] == ln.accel:
+                            for q in pend: self.accplan[q] = t
+                        self.accplan[ln.i] = t; last = (ln.feature, ln.accel, t)
+                        self.acc_target_max = max(self.acc_target_max, t)
+                    else:
+                        last = None
+                    pend = []
+                elif last is not None and ln.feature == last[0] and ln.accel == last[1]:
+                    pend.append(ln.i)
+                else:
+                    pend = []; last = None
+
     def feed(self, ln, s):
         F = ln.effF
         if not (ln.opt and ln.is_ext) or ln.layer < self.st.skip_layers:
@@ -262,10 +313,15 @@ class Optimizer:
         return orig
 
     # ------------------------------------------------------------ thermal
-    def eval_layer(self, k, s, fanpol, prev_state, tstart):
+    def _acc_of(self, acc):
+        if not acc or not self.accplan: return None
+        ap = self.accplan
+        return lambda ln: ap.get(ln.i, ln.accel)
+
+    def eval_layer(self, k, s, fanpol, prev_state, tstart, acc=False):
         d = self.L[k]; lines = d['lines']
         feeds = [self.feed(ln, s) if ln.kind == 'motion' else None for ln in lines]
-        durs, _ = estimate_times(lines, self.kin, feed_of=lambda ln: feeds[ln.i - d['a']])
+        durs, _ = estimate_times(lines, self.kin, feed_of=lambda ln: feeds[ln.i - d['a']], accel_of=self._acc_of(acc))
         n = len(lines); t = tstart; starts = [0.0] * n
         fan_t = 0.0; tt = 0.0
         for i in range(n):
@@ -274,6 +330,7 @@ class Optimizer:
                 fv = self.boost.get(lines[i].i) or self.fan_value(lines[i].fan, fanpol, k)
                 fan_t += fv / 255.0 * durs[i]; tt += durs[i]
         ev = LayerEval(); ev.time = t - tstart; ev.s = s; ev.fanpol = fanpol; ev.tstart = tstart; ev.feeds = feeds
+        ev.acc = bool(acc and self.accplan)
         fan_avg = fan_t / tt if tt > 0 else 0.0
         ev.fan_avg = fan_avg
         tau = self.mat['tau_still'] / (1.0 + M.K_FAN * fan_avg)
@@ -335,6 +392,8 @@ class Optimizer:
         grid_dn = [round(1.0 - 0.05 * i, 2) for i in range(1, int(round((1.0 - st.min_scale) / 0.05)) + 1)]
         raiseS = self.fan_cap_pct * 2.55
         lower = ('lower', 0.5, self.fan_min_cfg * 2.55)
+        use_acc = bool(self.accplan)
+        mlt = self.min_layer_time
         self.decisions = []
 
         def nxt_T(k, e, t):
@@ -342,50 +401,141 @@ class Optimizer:
             en = self.eval_layer(k + 1, 1.0, None, [(x[0], x[1], x[2]) for x in e.isl], t + e.time)
             return en.Tmax if en.Tmax is not None else -1e9
 
+        def done(e, dec):
+            self.decisions.append(dec + (' acc+' if e.acc else '')); return e
+
         def choose(k, prev, t):
             e1 = self.eval_layer(k, 1.0, None, prev, t)
             if k < st.skip_layers or e1.Tmax is None:
-                self.decisions.append('keep'); return e1
+                return done(e1, 'keep')
             ok_hot = lambda e: e.Tmax <= hi and nxt_T(k, e, t) <= hi
             n1 = nxt_T(k, e1, t)
             if e1.Tmax > mat['t_high'] or n1 > mat['t_high']:
+                # hot: never raise acceleration here. speed/balanced try the free fix (more fan, same speed) first.
+                if st.goal != 'quality' and st.fan:
+                    e = self.eval_layer(k, 1.0, ('raise', raiseS), prev, t)
+                    if ok_hot(e): return done(e, 'hot->s1.00 fan+')
                 for pol in ([None, ('raise', raiseS)] if st.fan else [None]):
                     for s in ([1.0] if pol else []) + (grid_dn if st.speed else []):
                         e = self.eval_layer(k, s, pol, prev, t)
                         if ok_hot(e):
-                            self.decisions.append('hot->s%.2f%s' % (s, ' fan+' if pol else '')); return e
+                            return done(e, 'hot->s%.2f%s' % (s, ' fan+' if pol else ''))
                 e = self.eval_layer(k, st.min_scale if st.speed else 1.0, ('raise', raiseS) if st.fan else None, prev, t)
-                self.decisions.append('hot-residual'); return e
+                return done(e, 'hot-residual')
             if mat['cold_matters'] and e1.cold_frac >= 0.25:
                 best = e1
                 for pol in ([None, lower] if st.fan else [None]):
                     for s in [1.0] + (grid_up if st.speed else []):
-                        if s == 1.0 and pol is None: continue
-                        e = self.eval_layer(k, s, pol, prev, t)
-                        if e.Tmax > hi or (self.min_layer_time and e.time < min(self.min_layer_time, e1.time) - 1e-6):
+                        if s == 1.0 and pol is None and not use_acc: continue
+                        e = self.eval_layer(k, s, pol, prev, t, use_acc)
+                        if e.Tmax > hi or (mlt and e.time < min(mlt, e1.time) - 1e-6):
                             continue
-                        if s > 1.0 and nxt_T(k, e, t) > hi: continue
+                        if (s > 1.0 or e.acc) and nxt_T(k, e, t) > hi: continue
                         if e.cold_frac < 0.25:
-                            self.decisions.append('cold->s%.2f%s' % (s, ' fan-' if pol else '')); return e
+                            return done(e, 'cold->s%.2f%s' % (s, ' fan-' if pol else ''))
                         if (e.Tmean or 0) > (best.Tmean or 0): best = e
-                self.decisions.append('cold-residual'); return best
+                return done(best, 'cold-residual')
+            floor_t = min(e1.time, mlt) if mlt else 0
+            base_e = e1
+            if use_acc and e1.Tmax < hi and n1 < hi:
+                ea = self.eval_layer(k, 1.0, None, prev, t, True)
+                if ea.Tmax <= hi and ea.time >= floor_t - 1e-6 and nxt_T(k, ea, t) <= hi:
+                    base_e = ea
             if st.speed and grid_up and e1.Tmax < hi and n1 < hi:
-                floor_t = min(e1.time, self.min_layer_time) if self.min_layer_time else 0
-                if self.min_layer_time and e1.time < self.min_layer_time * 1.05:
-                    self.decisions.append('keep(min-layer-time)'); return e1
+                if mlt and e1.time < mlt * 1.05:
+                    return done(base_e, 'keep(min-layer-time)')
                 lo_i, hi_i, best = 0, len(grid_up) - 1, None
                 while lo_i <= hi_i:
                     mid = (lo_i + hi_i) // 2
-                    e = self.eval_layer(k, grid_up[mid], None, prev, t)
+                    e = self.eval_layer(k, grid_up[mid], None, prev, t, base_e.acc)
                     if e.Tmax <= hi and e.time >= floor_t - 1e-6 and nxt_T(k, e, t) <= hi:
                         best = e; lo_i = mid + 1
                     else:
                         hi_i = mid - 1
-                if best is not None and best.time < e1.time - 0.05:
-                    self.decisions.append('speed s%.2f' % best.s); return best
-            self.decisions.append('keep'); return e1
+                if best is not None and best.time < base_e.time - 0.05:
+                    return done(best, 'speed s%.2f' % best.s)
+            return done(base_e, 'keep')
         self.opt = self.run_chain(choose, key='opt')
         return self.opt
+
+    def rechain(self):
+        """Re-evaluate the thermal chain with the current per-layer choices (speed scale, fan policy, accel)."""
+        ch = [(e.s, e.fanpol, e.acc) for e in self.opt]
+        self.opt = self.run_chain(lambda k, p, t: self.eval_layer(k, ch[k][0], ch[k][1], p, t, ch[k][2]), key='budget')
+
+    def enforce_budget(self, frac, extra_s=0.0):
+        """Keep the modelled print time <= original * (1 + frac). Pays first with everything that is already faster
+        (speed-ups, acceleration, fan-only fixes), then drops the lowest-value slowdowns: cooling slowdowns with the
+        smallest predicted overheat per second first, then unmarked-overhang slowdowns (25-50 %, 50-75 %, >75 %).
+        Fan changes stay (they cost no time). Returns seconds still over (0 when met)."""
+        if frac is None: return 0.0
+        bs = getattr(self, 'budget_stats', None) or {'kept_hot_layers': 0, 'dropped_overhangs': 0, 'rounds': 0}
+        self.budget_stats = bs
+        B = sum(e.time for e in self.base)
+        target = B * (1.0 + frac) - 0.001 * B - extra_s
+        thigh = self.mat['t_high']
+        for _ in range(30):
+            T = sum(e.time for e in self.opt)
+            D = T - target
+            bs['over_s'] = max(0.0, D)
+            if D <= 0: return 0.0
+            bs['rounds'] += 1
+            cands = []
+            for k, e in enumerate(self.opt):
+                if e.s < 1.0 - 1e-9:
+                    prev = [(x[0], x[1], x[2]) for x in self.opt[k - 1].isl] if k else None
+                    e1 = self.eval_layer(k, 1.0, e.fanpol, prev, e.tstart, e.acc)
+                    saved = e.time - e1.time
+                    if saved <= 1e-6: continue
+                    nb = self.base[k + 1].Tmax if k + 1 < self.nl and self.base[k + 1].Tmax is not None else -1e9
+                    excess = max(0.5, max(self.base[k].Tmax or -1e9, nb) - thigh)
+                    cands.append((0, excess / saved, saved, k))
+            if not cands:
+                # second phase: unmarked-overhang slowdowns, least overhanging first
+                byk = {}
+                for i in self.ovf:
+                    byk.setdefault(self.g.lines[i].layer, []).append(i)
+                for k, idx in byk.items():
+                    if k < 0 or k >= self.nl: continue
+                    e = self.opt[k]
+                    keep = {i: self.ovf.pop(i) for i in idx}
+                    prev = [(x[0], x[1], x[2]) for x in self.opt[k - 1].isl] if k else None
+                    e1 = self.eval_layer(k, e.s, e.fanpol, prev, e.tstart, e.acc)
+                    self.ovf.update(keep)
+                    saved = e.time - e1.time
+                    if saved <= 1e-6: continue
+                    ovm = sum(self.ov_info.get(i, 0.5) for i in idx) / len(idx)
+                    cands.append((1, ovm * len(idx) / saved, saved, k))
+            if not cands:
+                return D
+            cands.sort(key=lambda c: (c[0], c[1]))
+            got = 0.0
+            for phase, _v, saved, k in cands:
+                e = self.opt[k]
+                if phase == 0:
+                    e.s = 1.0; bs['kept_hot_layers'] += 1
+                    self.decisions[k] = 'hot-kept(time budget)' + (' fan+' if e.fanpol else '') + (' acc+' if e.acc else '')
+                else:
+                    idx = [i for i in self.ovf if self.g.lines[i].layer == k]
+                    for i in idx: self.ovf.pop(i, None)
+                    bs['dropped_overhangs'] += len(idx)
+                got += saved
+                if got >= D * 1.05: break
+            self.rechain()
+        return max(0.0, sum(e.time for e in self.opt) - target)
+
+    def accel_savings(self):
+        """Seconds saved by the raised accelerations alone (same feeds, original M204)."""
+        tot = 0.0; layers = 0
+        for k, e in enumerate(self.opt):
+            if not e.acc: continue
+            d = self.L[k]; lines = d['lines']
+            fo = lambda ln, d=d, e=e: e.feeds[ln.i - d['a']]
+            t0 = sum(estimate_times(lines, self.kin, feed_of=fo)[0])
+            t1 = sum(estimate_times(lines, self.kin, feed_of=fo, accel_of=self._acc_of(True))[0])
+            tot += t0 - t1; layers += 1
+        self.acc_saved = tot; self.acc_layers = layers
+        return tot
 
     # ------------------------------------------------------------ travel & stringing
     def analyse_travel(self):
@@ -550,8 +700,13 @@ class Optimizer:
         self.build_geometry()
         self.detect_overhangs()
         self.compute_run_caps()
+        self.plan_accel()
         self.baseline()
         self.optimise()
+        self.budget_stats = {'kept_hot_layers': 0, 'dropped_overhangs': 0, 'rounds': 0, 'over_s': 0.0}
+        if self.st.time_budget is not None:
+            self.enforce_budget(self.st.time_budget)
+        self.accel_savings()
         self.analyse_travel()
         self.plan_reorder()
         return self

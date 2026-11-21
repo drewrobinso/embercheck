@@ -15,12 +15,12 @@ import argparse, os, sys, time, datetime, hashlib, io, zipfile, re, traceback, w
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from gcode_model import GcodeFile, Kinematics, estimate_times, UnsupportedGcode  # noqa: E402
-from optimizer import Optimizer, Settings, HAVE_GEOM, GEOM_ERROR  # noqa: E402
+from optimizer import Optimizer, Settings, HAVE_GEOM, GEOM_ERROR, ACCEL_FEATURES, ACCEL_MIN_LAYER  # noqa: E402
 from emitter import emit, validate, rewrite_m73  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.2.1'
+VERSION = '1.3.0'
 
 
 def windows_documents_dir():
@@ -83,14 +83,30 @@ def process_text(text, st, name, log, progress=noop):
     progress('parse', 0.0)
     g = GcodeFile(text, progress=progress)
     opt = Optimizer(g, st, log=log, progress=progress).run()
-    out, est = emit(opt, progress=progress)
-    m73n = 0
-    if st.m73:
-        out, m73n = rewrite_m73(g, out, opt.kin, progress=progress)
-    errs, metrics = validate(g, out, opt, progress=progress)
-    ng = GcodeFile(out) if not errs else None
     kin = Kinematics(g)
-    tb = body_time(g, kin); ta = body_time(ng, kin) if ng else tb
+    tb = body_time(g, kin)
+
+    def build():
+        out, est = emit(opt, progress=progress)
+        m73n = 0
+        if st.m73:
+            out, m73n = rewrite_m73(g, out, opt.kin, progress=progress)
+        errs, metrics = validate(g, out, opt, progress=progress)
+        ng = GcodeFile(out) if not errs else None
+        ta = body_time(ng, kin) if ng else tb
+        return out, est, m73n, errs, metrics, ta
+    out, est, m73n, errs, metrics, ta = build()
+    # the goal's time limit is checked on the real output (same estimator as the card / M73), not just the plan
+    tries = 0
+    while st.time_budget is not None and not errs and tb and ta > tb * (1 + st.time_budget) and tries < 4:
+        tries += 1
+        over = ta - tb * (1 + st.time_budget)
+        log('time budget: output %.1fs over the %s limit, trimming more' % (over, st.goal))
+        left = opt.enforce_budget(st.time_budget, extra_s=over * 1.5 + 0.0005 * tb)
+        opt.accel_savings()
+        out, est, m73n, errs, metrics, ta = build()
+        if left > 0 and ta > tb * (1 + st.time_budget):
+            break
     bt = None
     for ln in g.raw_lines[:30]:
         mm = re.search(r'model printing time:\s*([^;]+)', ln)
@@ -102,6 +118,7 @@ def process_text(text, st, name, log, progress=noop):
     cold_a = sum(1 for e in opt.opt if e.cold_frac >= 0.25)
     need = [opt.opt[i].time for i in range(opt.nl) if opt.base[i].Tmax is not None and opt.base[i].Tmax > hi]
     cat, flow_lim, ext_t = R.time_breakdown(opt)
+    bs = getattr(opt, 'budget_stats', {}) or {}
     dec = opt.decisions
     sped = sum(1 for d in dec if d.startswith('speed') or (d.startswith('cold->s') and not d.startswith('cold->s1.00')))
     slowed = sum(1 for d in dec if d.startswith('hot->s') and not d.startswith('hot->s1.00')) + dec.count('hot-residual')
@@ -112,11 +129,24 @@ def process_text(text, st, name, log, progress=noop):
         '%d feedrate values changed, %d existing fan commands changed, %d fan commands inserted (overhang/bridge boost + restore)' % (
             est['f_changed'], est['fan_changed'], est['fan_inserted']),
         '%d wall segments slowed for overhangs not marked by the slicer' % len(opt.ovf),
+        'Acceleration raised on %d layers (%s, up to %d mm/s&sup2;; outer walls, overhangs, bridges, top surfaces and the first %d layers keep the slicer\'s value): %s' % (
+            getattr(opt, 'acc_layers', 0), ', '.join(sorted(ACCEL_FEATURES[st.goal])).lower(), getattr(opt, 'acc_target_max', 0), ACCEL_MIN_LAYER,
+            R.fmt_t(getattr(opt, 'acc_saved', 0.0)) + ' saved') if getattr(opt, 'acc_layers', 0) else 'Acceleration unchanged',
+        ('Goal %s: print time limit %s; %d cooling slowdowns and %d overhang slowdowns were dropped to stay within it' % (
+            st.goal, 'not slower than the original' if st.time_budget == 0 else '+%g%%' % (100 * st.time_budget),
+            bs.get('kept_hot_layers', 0), bs.get('dropped_overhangs', 0))) if st.time_budget is not None else
+        'Goal quality: no print-time limit, thermal and overhang quality first',
         '%d anti-string retractions added' % opt.travel['fixed'],
         '%d infill runs re-ordered' % (len(opt.order) and opt.reorder_stats['reordered_runs'] if st.reorder else 0),
         '%d M73 remaining-time values updated' % m73n,
         'Nothing else touched: no temperatures, no E values, no start/end/AMS/timelapse G-code.']
     summary = {'t_before': tb, 't_after': ta, 'dt_pct': 100 * (ta - tb) / tb if tb else 0, 'bambu_time': bt,
+               'goal': st.goal, 'time_budget_pct': None if st.time_budget is None else 100 * st.time_budget,
+               'acc_saved_s': getattr(opt, 'acc_saved', 0.0), 'acc_saved_pct': 100 * getattr(opt, 'acc_saved', 0.0) / tb if tb else 0,
+               'acc_layers': getattr(opt, 'acc_layers', 0), 'acc_moves': est.get('acc_moves', 0),
+               'acc_target_max': getattr(opt, 'acc_target_max', 0),
+               'budget_kept_hot': bs.get('kept_hot_layers', 0), 'budget_dropped_overhangs': bs.get('dropped_overhangs', 0),
+               'overhangs_slowed': len(opt.ovf),
                'hot_before': hot_b, 'hot_after': hot_a, 'cold_before': cold_b, 'cold_after': cold_a,
                'hot_layer_time_needed': int(max(need) + 0.999) if need else None, 'breakdown': cat,
                'flow_limited_share': flow_lim / ext_t if ext_t else 0,
@@ -128,6 +158,7 @@ def process_text(text, st, name, log, progress=noop):
     desc = 'goal=%s, max speed-up %.2fx, %s%s%s' % (st.goal, st.max_speedup, 'reorder on, ' if st.reorder else '',
                                                    'fix-strings on, ' if st.fix_strings else '', 'v' + VERSION)
     html = R.build(opt, summary, {'errors': errs, 'metrics': metrics}, applied, name, desc)
+    summary['hot_after'] = hot_a
     summary['recs'] = R.recommendations(opt, summary)
     summary['overhang_adjusted'] = len(opt.ovf) + len(opt.boost)
     summary['n_edits'] = est['f_changed'] + est['fan_changed'] + est['fan_inserted'] + est['f_inserted'] + est['acc_inserted'] + \
@@ -146,12 +177,13 @@ def card_data(summ, name, report_path, dry_run):
         status = 'nochange'
     else:
         status = 'optimized'
-    order = {'Cooling / min layer time': 0, 'Chamber / cold layers': 1, 'Stringing / travel': 2, 'Overhangs': 3, 'Bridges': 4}
+    order = {'Goal': -1, 'Cooling / min layer time': 0, 'Chamber / cold layers': 1, 'Stringing / travel': 2, 'Overhangs': 3, 'Bridges': 4}
     recs = sorted(summ.get('recs') or [], key=lambda r: order.get(r[0], 9))
     return {'status': status, 'name': name, 'dt_pct': summ.get('dt_pct', 0.0), 'bambu_time': summ.get('bambu_time'),
             'hot_before': summ.get('hot_before', 0), 'hot_after': summ.get('hot_after', 0),
             'cold_before': summ.get('cold_before', 0), 'cold_after': summ.get('cold_after', 0),
-            'overhang_adjusted': summ.get('overhang_adjusted', 0),
+            'overhang_adjusted': summ.get('overhang_adjusted', 0), 'goal': summ.get('goal'),
+            'acc_saved_s': summ.get('acc_saved_s', 0.0), 'acc_saved_pct': summ.get('acc_saved_pct', 0.0),
             'open_air': summ.get('travel', {}).get('open_air', 0),
             'open_air_unretracted': summ.get('travel', {}).get('open_air_unretracted', 0),
             'recommendations': [list(r) for r in recs[:3]], 'report': report_path, 'errors': errs,
@@ -339,6 +371,8 @@ def main(argv=None):
     ap.add_argument('--skip-layers', type=int, default=2, help='never change speeds on the first N layers (default 2)')
     ap.add_argument('--no-speed', action='store_true'); ap.add_argument('--no-fan', action='store_true')
     ap.add_argument('--no-overhang', action='store_true'); ap.add_argument('--no-bridge-fan', action='store_true')
+    ap.add_argument('--no-accel', action='store_true', help='keep the slicer\'s accelerations (no M204 changes)')
+    ap.add_argument('--no-time-limit', action='store_true', help='let speed/balanced add time (old behaviour)')
     ap.add_argument('--reorder', action='store_true', help='re-order infill islands to shorten travel')
     ap.add_argument('--fix-strings', action='store_true', help='add retraction to un-retracted open-air travels')
     ap.add_argument('--no-m73', action='store_true', help='do not update M73 remaining-time values')
@@ -417,7 +451,8 @@ def main(argv=None):
 
     st = Settings(goal=a.goal, max_speedup=a.max_speedup, material=a.material, chamber=a.chamber,
                   skip_layers=a.skip_layers, speed=not a.no_speed, fan=not a.no_fan, overhang=not a.no_overhang,
-                  bridge_fan=not a.no_bridge_fan, reorder=a.reorder, fix_strings=a.fix_strings, m73=not a.no_m73)
+                  bridge_fan=not a.no_bridge_fan, reorder=a.reorder, fix_strings=a.fix_strings, m73=not a.no_m73,
+                  accel=not a.no_accel, time_budget='none' if a.no_time_limit else 'goal')
     st.dry_run = a.dry_run
     if not HAVE_GEOM:
         log('WARNING: shapely/numpy not available (%s) - island, overhang and travel analysis disabled (pip install shapely)' % GEOM_ERROR)

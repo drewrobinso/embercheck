@@ -67,8 +67,9 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
   - No console window appears. The program is a Windows GUI-subsystem exe.
 - When it finishes, the G-code is written first. Then a **results card** opens in its own process, so Bambu Studio continues straight away. The card shows:
   - the status: *Optimized*, *No changes needed*, or *Check failed — G-code left unchanged*
-  - the print-time change, hot and cold layers before → after, the number of overhang segments slowed, and open-air and un-retracted travels
-  - the top recommendations
+  - the goal, the print-time change (and how much of it came from faster acceleration), hot and cold layers before → after, the number of overhang segments slowed, and open-air and un-retracted travels
+  - the top recommendations, in full. Long text wraps and the list scrolls if the screen is too small; the buttons are always visible.
+  - The windows are DPI-aware, so they are sharp and sized correctly at 125%, 150% or 200% Windows display scaling (see `screens/ui_scaling/`, made by `test/ui_shots.py`).
   - **Open full report** (the HTML report with heat maps and charts)
   - It closes itself after 60 s unless you click it.
 - Reports, the summary JSON and `optimizer.log` are saved in `Documents\BambuPrintOptimizer\reports\`. A Documents folder moved to OneDrive is found through the Windows known-folder API.
@@ -105,11 +106,32 @@ Use `BambuPrintOptimizer-<version>-python.zip`. It is flat: the files sit at the
    Or create the presets automatically: `py C:\BambuPrintOptimizer\bambu_optimizer.py --install-presets` (and `--remove-presets` to undo).
 3. Standalone: `py C:\BambuPrintOptimizer\bambu_optimizer.py "C:\path\plate.gcode.3mf"` writes `plate.optimized.gcode.3mf`, with the G-code and its MD5 updated. Plain `.gcode` works too (`-o out.gcode`, or in place).
 
+## The three goals
+
+Each `AI <Goal>` preset runs the optimizer with that goal. `test/goal_matrix.py` checks these rules on the six reference prints.
+
+| Goal | Promise | What it does |
+|---|---|---|
+| **Speed** | Print time is **never longer** than Bambu's original. | Speeds up inner walls and infill up to 1.5× and raises their acceleration up to the machine maximum. Hot layers get more fan first (free). Slowdowns for cooling or overhangs only stay if the speed-ups pay for them; otherwise the lowest-value ones are dropped, and the hot layers left over are listed as the first recommendation. |
+| **Balanced** (default) | Fixes most hot layers, print time **at most +2%**. | Same tools with a 1.25× speed-up cap and 1.5× acceleration. If the fixes would cost more than 2%, the least important slowdowns are dropped first. |
+| **Quality** | Thermal and overhang quality first; may add time. | No feed speed-ups, a bigger temperature safety margin (5 °C), 25–50% overhangs are slowed too, acceleration only +20% and only on sparse/internal solid infill. Ends with no more hot layers than Balanced and at least as many overhang slowdowns. |
+
+The time limit is checked twice: on the plan, and again on the written G-code with the same estimator that sets the M73 remaining time. Run with `--no-time-limit` to get the old behaviour (fixes are applied whatever they cost).
+
+**Speed-aware acceleration** (M204), applied per Bambu `;FEATURE:` type:
+- Raised: sparse infill, internal solid infill and inner walls (Quality: infill only), never above `machine_max_acceleration_extruding` from the G-code header and never below the preset's own value.
+- Never raised: outer walls, overhangs, bridges, top surfaces, the first 3 layers, wipes, and anything inside protected AMS / tool-change / timelapse blocks.
+- The slicer's value is put back at every feature change, layer change and before every protected block, and the built-in validator rejects the output if any other extrusion move has a different acceleration.
+- The motion model includes the new acceleration, so the M73 remaining time is right. The time saved by acceleration is shown separately on the results card and in the report.
+- Hot layers never get faster acceleration: it would shorten their cooling time. `--no-accel` turns this off.
+
 ## Options
 
 | Option | Meaning |
 |---|---|
-| `--goal quality / balanced / speed` | Only fix risk layers / also speed up to 1.25x / up to 1.5x (inner walls and infill only). Default: balanced. |
+| `--goal quality / balanced / speed` | See [The three goals](#the-three-goals). Default: balanced. |
+| `--no-accel` | Keep the slicer's accelerations (no M204 changes). |
+| `--no-time-limit` | Let Speed/Balanced add whatever time the fixes cost (pre-1.3 behaviour). |
 | `--max-speedup 1.15` | Your own cap on the speed-up. |
 | `--dry-run` | Report only. |
 | `--reorder` | Re-order infill islands to shorten travel (off by default). |
@@ -213,26 +235,48 @@ SignPath one-time setup:
 - `packaging/`: PyInstaller spec, Inno Setup script, icon, SignPath artifact configurations
 - `scripts/`: build scripts (Windows / Wine), portable zip, local test signing
 
-## Test results (box, 2026-11-21)
+## Test results (box, 2026-11-21, 1.3.0)
 
 These are model and estimator results only. Nothing has been printed yet.
 
-The test G-code came from the **Bambu Studio 02.09.01.70 CLI** using the official **Bambu Lab H2S 0.4 nozzle** machine profile (including its real start/end, timelapse and filament-change templates), `0.20mm Standard @BBL H2S`, and Bambu filament profiles. The models were a 60×60 mm test plate with an 8 mm spire, a cylinder and a bridge (225 layers), and the Metra-style speaker adapter (166 layers, ~86 g PETG). Settings: `--goal balanced`.
+The test G-code came from the **Bambu Studio 02.09.01.70 CLI** using the official **Bambu Lab H2S 0.4 nozzle** machine profile (including its real start/end, timelapse and filament-change templates), `0.20mm Standard @BBL H2S`, and Bambu filament profiles. The models were a 60×60 mm test plate with an 8 mm spire, a cylinder and a bridge (225 layers), and the Metra-style speaker adapter (166 layers, ~86 g PETG). 
+Results for all three goals (1.3.0, `python3 test/goal_matrix.py`). "of which accel" is the part of the time change that comes from the raised accelerations alone. The time is the optimizer's own motion model of the written G-code (the same one that sets M73).
 
-| Print | Bambu estimate | Our model before → after | Hot layers | Cold layers | Notes |
-|---|---|---|---|---|---|
-| Tower PLA Basic | 31m44s | 28.8 → 28.9 min (+0.5%) | 101 → 2 | 0 → 0 | the spire top needed slowing; small speed-ups elsewhere |
-| Tower PETG HF | 42m16s | 40.0 → 37.6 min (−5.8%) | 44 → 0 | (8, info only) | |
-| Tower ABS | 45m23s | 43.3 → 41.1 min (−5.2%) | 0 → 0 | 8 → 7 | |
-| Tower ASA | 45m26s | 43.4 → 41.5 min (−4.2%) | 98 → 96 | 4 → 4 | the spire is already at Bambu's minimum speed and the ASA fan cap is 40%, so it stays flagged and the report recommends a cooling tower or multiple copies |
-| Speaker adapter PETG | 2h45m | 131.5 → 129.0 min (−1.9%) | 0 → 0 | (100, info only) | 25% of extrusion time is already at the 25 mm³/s flow limit; most of the time is outer wall and top surfaces, which are never sped up |
-| Speaker adapter ASA | 2h32m | 124.4 → 124.4 min (0.0%) | 0 → 0 | 46 → 46 | flow-limited (39%); the large flange layers are "cold" and need a warmer chamber, which post-processing can't provide |
+| Print | Goal | Time | of which accel | Hot layers | Cold layers | Overhangs slowed | Valid |
+|---|---|---|---|---|---|---|---|
+| tower_pla | speed | -3.02% | -2.37% | 101 → 2 | 0 → 0 | 16 | PASS |
+| tower_pla | balanced | -0.84% | -1.46% | 101 → 2 | 0 → 0 | 16 | PASS |
+| tower_pla | quality | +3.51% | -0.51% | 101 → 2 | 0 → 0 | 26 | PASS |
+| tower_petg | speed | -7.32% | -1.15% | 44 → 0 | 8 → 8 | 16 | PASS |
+| tower_petg | balanced | -6.43% | -0.73% | 44 → 0 | 8 → 8 | 16 | PASS |
+| tower_petg | quality | +0.06% | -0.26% | 44 → 0 | 8 → 9 | 26 | PASS |
+| tower_abs | speed | -5.63% | -0.85% | 0 → 0 | 8 → 7 | 16 | PASS |
+| tower_abs | balanced | -5.48% | -0.56% | 0 → 0 | 8 → 7 | 16 | PASS |
+| tower_abs | quality | -0.21% | -0.21% | 0 → 0 | 8 → 8 | 26 | PASS |
+| tower_asa | speed | -4.66% | -0.85% | 98 → 96 | 4 → 4 | 16 | PASS |
+| tower_asa | balanced | -4.51% | -0.56% | 98 → 96 | 4 → 4 | 16 | PASS |
+| tower_asa | quality | +0.72% | -0.21% | 98 → 96 | 4 → 4 | 26 | PASS |
+| speaker_petg | speed | -6.21% | -4.00% | 0 → 0 | 100 → 84 | 1965 | PASS |
+| speaker_petg | balanced | -4.32% | -2.43% | 0 → 0 | 100 → 88 | 1965 | PASS |
+| speaker_petg | quality | -0.66% | -1.10% | 0 → 0 | 100 → 99 | 2187 | PASS |
+| speaker_asa | speed | -4.19% | -4.20% | 0 → 0 | 46 → 46 | 1965 | PASS |
+| speaker_asa | balanced | -2.43% | -2.51% | 0 → 0 | 46 → 46 | 1965 | PASS |
+| speaker_asa | quality | -0.68% | -1.14% | 0 → 0 | 46 → 46 | 2187 | PASS |
+
+All rules passed on every print: Speed ≤ 0%, Balanced ≤ +2% and fixes at least half of the fixable hot layers, Quality hot ≤ Balanced, Quality overhangs ≥ Balanced, and time(Speed) ≤ time(Balanced) ≤ time(Quality). Stress cases (Speed and Balanced with speed-ups and acceleration turned off, so only slowdowns are available) also stayed within their limits by dropping the lowest-value slowdowns: Speed +0.00%, Balanced +1.78%.
+
+Compared with 1.2.1, Speed on the ASA speaker went from +0.03% to −4.19%, and on the PLA tower from −0.81% to −3.02%.
+
+Notes:
+- Tower ASA: the spire is already at Bambu's minimum speed and the ASA fan cap is 40%, so 96 layers stay flagged even on Quality, and the report recommends a cooling tower or multiple copies.
+- Speakers: 25–39% of extrusion time is at the filament's flow limit, so most of the gain comes from acceleration. The big flange layers are "cold" and need a warmer chamber, which post-processing can't provide.
 
 Every output passed both the built-in validator and the independent `verify.py`:
 - same layer count
 - per-layer extrusion difference 0.0 mm
 - start/end/temperature/AMS/timelapse lines identical
-- only F, fan S and M73 R values changed, plus inserted `G1 F` / `M106` lines
+- only F, fan S and M73 R values changed, plus inserted `G1 F` / `M106` / `M204` lines
+- the acceleration in effect at every feature change, layer change and AMS block is the slicer's own, and never above the machine maximum
 
 With `--reorder --fix-strings`:
 - travel in re-orderable infill runs went down 0.7–2.4% (for example, 83.8 m → 81.7 m on the speaker)

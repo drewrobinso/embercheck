@@ -38,10 +38,13 @@ def emit(opt, progress=None):
             if F is not None and abs(F - G[a + j].effF) > 0.5:
                 feeds[a + j] = F
         fanpol[k] = ev.fanpol
+    accplan = {i: A for i, A in getattr(opt, 'accplan', {}).items()
+               if 0 <= G[i].layer < opt.nl and getattr(opt.opt[G[i].layer], 'acc', False)}
     out = []
-    out_F = None; out_acc = None; out_w = None
+    out_F = None; out_acc = None; out_w = None; orig_acc = None
     base_fan = 0.0; out_fan = 0.0; boosted = False
-    stats = {'f_changed': 0, 'fan_changed': 0, 'fan_inserted': 0, 'f_inserted': 0, 'acc_inserted': 0}
+    stats = {'f_changed': 0, 'fan_changed': 0, 'fan_inserted': 0, 'f_inserted': 0, 'acc_inserted': 0, 'acc_raised': 0,
+             'acc_restored': 0, 'acc_moves': 0}
     # emission order
     seq = list(range(0, g.body_start))
     for k in range(opt.nl):
@@ -63,6 +66,10 @@ def emit(opt, progress=None):
                 boosted = False; out_fan = base_fan
             if ln.kind == 'motion' and ln.f is None and out_F is not None and abs(out_F - ln.effF) > 0.5:
                 out.append('G1 F%s\n' % fmtF(ln.effF)); out_F = ln.effF; stats['f_inserted'] += 1
+        # raised acceleration never leaks into another feature or into a protected (AMS / tool-change / timelapse) block
+        if out_acc is not None and orig_acc is not None and abs(out_acc - orig_acc) > 0.5 and \
+                (not ln.opt or ln.text.startswith('; FEATURE:') or ln.text.startswith('; CHANGE_LAYER')):
+            out.append('M204 S%d\n' % int(round(orig_acc))); out_acc = orig_acc; stats['acc_restored'] += 1
         if ins:
             for t in ins:
                 out.append(t)
@@ -71,9 +78,14 @@ def emit(opt, progress=None):
         text = ln.text
         if ln.kind == 'motion':
             want = feeds.get(i, ln.effF)
+            if ln.opt:
+                wantA = accplan.get(i)
+                tgtA = wantA if wantA is not None else ln.accel
+                if wantA is not None: stats['acc_moves'] += 1
+                if tgtA is not None and out_acc is not None and abs(tgtA - out_acc) > 0.5:
+                    out.append('M204 S%d\n' % int(round(tgtA))); out_acc = tgtA
+                    stats['acc_raised' if wantA is not None else ('acc_inserted' if ln.layer in reordered_layers else 'acc_restored')] += 1
             if ln.opt and ln.layer in reordered_layers:
-                if ln.accel is not None and out_acc is not None and abs(ln.accel - out_acc) > 0.5:
-                    out.append('M204 S%d\n' % int(round(ln.accel))); out_acc = ln.accel; stats['acc_inserted'] += 1
                 if ln.is_ext and out_w is not None and abs(ln.width - out_w) > 1e-4:
                     out.append('; LINE_WIDTH: %g\n' % ln.width); out_w = ln.width
             if ln.opt:
@@ -117,6 +129,7 @@ def emit(opt, progress=None):
             base_fan = newS; out_fan = newS; boosted = False
         if ln.kind == 'accel':
             out_acc = ln.accel if ln.accel is not None else (ln.w.get('S', ln.w.get('P')) if ln.w else out_acc)
+            orig_acc = out_acc
         if 'LINE_WIDTH:' in text and text.startswith(';'):
             try: out_w = float(text.split(':', 1)[1])
             except ValueError: pass
@@ -204,17 +217,28 @@ def validate(orig_g, new_text, opt, progress=None):
     # per-segment feed ratio (matched by geometry so it also works after re-ordering)
     if not errs:
         key = lambda l: (l.layer, round(l.x, 3), round(l.y, 3), round(l.x0, 3), round(l.y0, 3), l.e)
-        fo = {}
+        fo = {}; ao = {}
         for l in orig_g.lines:
-            if l.is_ext and l.layer >= 0: fo.setdefault(key(l), []).append(l.effF)
+            if l.is_ext and l.layer >= 0:
+                fo.setdefault(key(l), []).append(l.effF); ao.setdefault(key(l), []).append(l.accel)
+        from optimizer import ACCEL_FEATURES, ACCEL_MIN_LAYER
+        feats = ACCEL_FEATURES.get(opt.st.goal, set()); acc_bad = 0; acc_up = 0
         for l in ng.lines:
             if l.is_ext and l.layer >= 0:
                 lst = fo.get(key(l))
                 if not lst: continue
+                oa = ao[key(l)][0]
+                if oa is not None and l.accel is not None and abs(l.accel - oa) > 0.5:
+                    if l.feature in feats and l.layer >= ACCEL_MIN_LAYER and oa < l.accel <= kin.amax + 0.5:
+                        acc_up += 1
+                    else:
+                        acc_bad += 1
                 r = l.effF / lst[0]
                 ratio_min = min(ratio_min, r); ratio_max = max(ratio_max, r)
         m['feed_ratio_min'] = round(ratio_min, 3); m['feed_ratio_max'] = round(ratio_max, 3)
         if ratio_max > opt.st.max_speedup + 1e-3: errs.append('feed raised beyond limit (%.3f)' % ratio_max)
+        m['accel_raised_moves'] = acc_up
+        if acc_bad: errs.append('acceleration changed on %d protected/visible extrusion moves' % acc_bad)
     if max_layer_dE > 1e-6: errs.append('extrusion per layer changed (max diff %.6f mm)' % max_layer_dE)
     if fmax > kin.vmax_xy * 60 + 1: errs.append('feedrate above machine limit')
     fans = [l.w.get('S', 0) for l in ng.lines if l.kind == 'fan' and l.cmd == 'M106' and l.layer >= 0]

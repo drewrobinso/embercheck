@@ -283,8 +283,9 @@ def line_dir(ln):
     if d < 1e-9: return None
     return (dx / d, dy / d)
 
-def estimate_times(lines, kin, feed_of=None):
-    """Return list of per-line durations (seconds). feed_of(ln)->F mm/min overrides effF."""
+def estimate_times(lines, kin, feed_of=None, accel_of=None):
+    """Return list of per-line durations (seconds). feed_of(ln)->F mm/min overrides effF, accel_of(ln)->mm/s2 overrides
+    the modal M204 acceleration."""
     n = len(lines)
     out = [0.0] * n
     speeds = [0.0] * n; dirs = [None] * n
@@ -319,7 +320,7 @@ def estimate_times(lines, kin, feed_of=None):
         nxt = k
     for k, ln in enumerate(lines):
         if ln.kind == 'motion':
-            a = ln.accel or kin.amax
+            a = (accel_of(ln) if accel_of else ln.accel) or kin.amax
             a = min(a, kin.amax if ln.is_ext else kin.amax_travel)
             if not (ln.length > 1e-9 and (dirs[k] is not None or ln.cmd in ('G2', 'G3'))):
                 a = kin.amax_z if (ln.e is None) else 5000
