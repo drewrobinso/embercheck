@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SignPath artifact configuration (slug: app). Upload = ZIP of dist/PrintOptimizer/ (PyInstaller one-folder build).
+     Signs ONLY our own PrintOptimizer.exe. Bundled upstream binaries (python312.dll, numpy/shapely .pyd, Tcl/Tk DLLs)
+     are left as shipped, as required by the SignPath Foundation policy ("sign your own binaries only"). -->
+<artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+  <parameters>
+    <parameter name="version" required="true" />
+  </parameters>
+  <zip-file>
+    <pe-file-set product-name="Bambu Print Optimizer" product-version="${version}" file-version="${version}"
+                 company-name="Andrew Robinson" original-filename="${file.name}">
+      <include path="PrintOptimizer.exe" min-matches="1" max-matches="1" />
+      <for-each>
+        <authenticode-sign />
+      </for-each>
+    </pe-file-set>
+  </zip-file>
+</artifact-configuration>

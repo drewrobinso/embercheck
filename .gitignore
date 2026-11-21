@@ -1,0 +1,35 @@
+# build output
+build/
+dist/
+*.spec.bak
+__pycache__/
+*.pyc
+
+# local signing material - NEVER commit
+signing/
+*.pfx
+*.p12
+*.key
+*.pem
+
+# large / generated test data
+test/out/
+test/results/
+test/progress/
+test/*.log
+
+# local tools (Bambu Studio AppImage etc.)
+tools/bs.AppImage
+tools/squashfs-root/
+
+# old packaging output
+package/
+BambuPrintOptimizer.zip
+
+# runtime artifacts when run from source
+src/presets_manifest.json
+src/presets.log
+src/optimizer.log
+
+# flattened Bambu Studio profiles (Bambu Lab, AGPL) - regenerate with tools/flatten_*.py
+tools/flat/
