@@ -13,6 +13,8 @@ CARDS = {
     'optimized': {'status': 'optimized', 'name': 'Speaker enclosure v3 final (2) :: plate_1.gcode', 'goal': 'balanced', 'dt_pct': 0.9,
                   'bambu_time': '7h 41m 12s', 'hot_before': 135, 'hot_after': 0, 'cold_before': 12, 'cold_after': 3,
                   'overhang_adjusted': 1965, 'open_air': 1873, 'open_air_unretracted': 4, 'acc_saved_s': 1110, 'acc_saved_pct': 4.0,
+                  'travel_saved_s': 3, 'travel_saved_mm': 412, 'hops_skipped': 6855, 'retracts_skipped': 6787, 'hop_saved_s': 2788,
+                  'arcs_on': False, 'arcs_note': 'printer does its own curve planning',
                   'recommendations': LONG, 'report': '/tmp/none.html'},
     'failed': {'status': 'failed', 'name': 'tower_asa.gcode.3mf :: plate_1.gcode', 'goal': 'speed', 'dt_pct': 0.0,
                'errors': ['layer 37: set of extrusion moves changed', 'extrusion per layer changed (max diff 0.000120 mm) - the original G-code was kept and nothing was written; please send the log folder with this file'],

@@ -1,9 +1,22 @@
 """Independent checker (does not use the optimizer's own parser).
-usage: verify.py original.gcode optimized.gcode [--reordered]"""
-import sys, re, collections
+usage: verify.py original.gcode optimized.gcode [--reordered] [--arc-tol 0.05]
+
+Always:   same layers; start/end, temperature and protected (AMS/firmware) lines identical; extrusion per layer
+          identical as EXACT decimals (all E, and positive XY E); the same extrusion moves per layer (start, end, Z, E),
+          where every new G2/G3 arc must replace a chain of original segments whose vertices lie on the arc
+          (within --arc-tol) and whose E adds up exactly.
+Default:  line-by-line alignment: only F/S/M73 values may change; allowed insertions (M106 S, G1 F, M204 S,
+          LINE_WIDTH, anti-string retract); allowed removals (Z-hop lift/lower, E-only retract/de-retract, wipe moves);
+          Z removed from a travel; arcs replacing consecutive G1 X Y E lines.
+--reordered: skip the line alignment (island order may differ)."""
+import sys, re, math, collections
+from decimal import Decimal
 o = open(sys.argv[1]).read().splitlines(); n = open(sys.argv[2]).read().splitlines()
 reordered = '--reordered' in sys.argv
-E = re.compile(r'\bE([-+]?[\d.]+)')
+ARC_TOL = float(sys.argv[sys.argv.index('--arc-tol') + 1]) if '--arc-tol' in sys.argv else 0.05
+WORD = re.compile(r'([A-Z])([-+]?(?:\d+\.?\d*|\.\d+))')
+
+
 def layers(L):
     out = []; cur = None
     for t in L:
@@ -11,25 +24,46 @@ def layers(L):
         elif t.startswith('; MACHINE_END_GCODE_START'): cur = None
         if cur is not None: cur.append(t)
     return out
+
+
+def words(c):
+    return {k: v for k, v in WORD.findall(c[2:] if c[:1] == 'G' else c)}
+
+
+def moves(L):
+    """Per layer: list of extrusion moves (x0, y0, x, y, z, E-decimal, arc-or-None), E totals."""
+    x = y = z = 0.0; absx = True; res = []
+    for lay in layers_idx(L):
+        segs = []; etot = Decimal(0); epos = Decimal(0)
+        for t in lay:
+            c = t.split(';')[0].strip()
+            if c.startswith('G90'): absx = True
+            elif c.startswith('G91'): absx = False
+            if c[:3] not in ('G0 ', 'G1 ', 'G2 ', 'G3 '): continue
+            w = words(c); g = c[:2]
+            nx = (float(w['X']) if 'X' in w else x) if absx else x + float(w.get('X', 0))
+            ny = (float(w['Y']) if 'Y' in w else y) if absx else y + float(w.get('Y', 0))
+            nz = (float(w['Z']) if 'Z' in w else z) if absx else z + float(w.get('Z', 0))
+            if 'E' in w:
+                e = Decimal(w['E']); etot += e
+                xy = abs(nx - x) > 1e-9 or abs(ny - y) > 1e-9
+                if e > 0 and xy:
+                    epos += e
+                    arc = (x + float(w.get('I', 0)), y + float(w.get('J', 0)), g == 'G3') if g in ('G2', 'G3') else None
+                    segs.append((round(x, 3), round(y, 3), round(nx, 3), round(ny, 3), round(nz, 3), e, arc))
+            x, y, z = nx, ny, nz
+        res.append((segs, etot, epos))
+    return res
+
+
+def layers_idx(L):
+    # body layers only (same split as layers())
+    return layers(L)
+
+
 lo, ln = layers(o), layers(n)
 res = collections.OrderedDict()
 res['layers_orig'] = len(lo); res['layers_new'] = len(ln)
-def esum(L, pos_only):
-    s = 0.0
-    for t in L:
-        c = t.split(';')[0]
-        if c[:3] in ('G0 ', 'G1 ', 'G2 ', 'G3 '):
-            m = E.search(c)
-            if m:
-                v = float(m.group(1))
-                xy = re.search(r'\s[XY][-+]?[\d.]', c) is not None
-                if not pos_only or (v > 0 and xy): s += v
-    return s
-res['E_total_orig'] = round(sum(esum(l, False) for l in lo), 5)
-res['E_total_new'] = round(sum(esum(l, False) for l in ln), 5)
-res['max_layer_E_diff'] = max(abs(esum(a, False) - esum(b, False)) for a, b in zip(lo, ln))
-res['max_layer_positiveE_diff'] = max(abs(esum(a, True) - esum(b, True)) for a, b in zip(lo, ln))
-# start / end blocks identical
 i0 = next(i for i, t in enumerate(o) if t.startswith('; CHANGE_LAYER')); j0 = next(i for i, t in enumerate(n) if t.startswith('; CHANGE_LAYER'))
 res['start_block_identical'] = o[:i0] == n[:j0]
 ie = next(i for i, t in enumerate(o) if t.startswith('; MACHINE_END_GCODE_START')); je = next(i for i, t in enumerate(n) if t.startswith('; MACHINE_END_GCODE_START'))
@@ -38,33 +72,104 @@ temps = lambda L: [t for t in L if t[:4] in ('M104', 'M109', 'M140', 'M190', 'M1
 res['temperature_lines_identical'] = temps(o) == temps(n)
 prot = lambda L: [t for t in L if t.startswith(('M620', 'M621', 'M622', 'M623', 'M991', 'M971', 'M1004', 'M993', '; SKIPP', 'M73 L'))]
 res['protected_cmds_identical'] = prot(o) == prot(n)
+
+# ---- exact extrusion + geometry
+mo, mn = moves(o), moves(n)
+e_bad = [k + 1 for k, (a, b) in enumerate(zip(mo, mn)) if a[1] != b[1] or a[2] != b[2]]
+res['E_total_orig'] = str(sum((m[1] for m in mo), Decimal(0))); res['E_total_new'] = str(sum((m[1] for m in mn), Decimal(0)))
+res['layers_with_E_difference'] = e_bad[:5]
+geo_bad = []; arcs_checked = 0; max_dev = 0.0
+for k, ((so, _, _), (sn, _, _)) in enumerate(zip(mo, mn)):
+    key = lambda s: s[:6]
+    orig = collections.Counter(key(s) for s in so)
+    plain = collections.Counter(key(s) for s in sn if s[6] is None or key(s) in orig)
+    extra = plain - orig
+    if extra: geo_bad.append((k + 1, 'moves not in original', list(extra)[:2])); continue
+    rem = orig - plain
+    by_start = collections.defaultdict(list)
+    for s, c in rem.items():
+        for _ in range(c): by_start[(s[0], s[1], s[4])].append(s)
+    for s in sn:
+        if s[6] is None or key(s) in orig: continue
+        cx, cy, ccw = s[6]; r = math.hypot(s[0] - cx, s[1] - cy)
+        cur = (s[0], s[1], s[4]); esum = Decimal(0); steps = 0; ok = False; swept = 0.0
+        ang = lambda px, py: math.atan2(py - cy, px - cx)
+        while steps < 5000:
+            lst = by_start.get(cur)
+            if not lst: break
+            seg = lst.pop(); steps += 1
+            esum += seg[5]
+            mx, my = (seg[0] + seg[2]) / 2, (seg[1] + seg[3]) / 2
+            dev = max(abs(math.hypot(seg[2] - cx, seg[3] - cy) - r), abs(math.hypot(mx - cx, my - cy) - r))
+            max_dev = max(max_dev, dev)
+            if dev > ARC_TOL + 0.002: break
+            da = (ang(seg[2], seg[3]) - ang(seg[0], seg[1]) + math.pi) % (2 * math.pi) - math.pi
+            if (da > 0) != ccw: break          # every step must turn the way the arc is drawn
+            swept += abs(da)
+            cur = (seg[2], seg[3], seg[4])
+            if (seg[2], seg[3]) == (s[2], s[3]):
+                drawn = (ang(s[2], s[3]) - ang(s[0], s[1])) % (2 * math.pi)
+                if not ccw: drawn = (2 * math.pi - drawn) % (2 * math.pi)
+                ok = esum == s[5] and abs(drawn - swept) < 0.02; break
+        arcs_checked += 1
+        if not ok: geo_bad.append((k + 1, 'arc not matching original segments', s[:6])); break
+    left = sum(len(v) for v in by_start.values())
+    if left and not geo_bad: geo_bad.append((k + 1, '%d original moves missing' % left))
+    if len(geo_bad) > 3: break
+res['arcs_checked'] = arcs_checked; res['arc_max_vertex_dev_mm'] = round(max_dev, 4)
+res['extrusion_geometry'] = geo_bad[:3] or 'identical'
+
+# ---- line alignment
 strip = lambda t: re.sub(r'\s[FS][-+]?[\d.]+', '', t).rstrip()
+stripz = lambda t: re.sub(r'\s[ZFS][-+]?[\d.]+', '', t).rstrip()
+REMOVABLE = [(re.compile(r'^G1 Z[-+]?[\d.]+( F\d+)?\s*$'), 'removed: Z-hop lower/lift'),
+             (re.compile(r'^G[23] Z[-+]?[\d.]+ I[-+]?[\d.]+ J[-+]?[\d.]+ P1(\s+F\d+)?\s*$'), 'removed: Z-hop spiral lift'),
+             (re.compile(r'^G1 E[-+]?[\d.]+( F\d+)?\s*$'), 'removed: retract/de-retract'),
+             (re.compile(r'^G1 X[-+]?[\d.]+ Y[-+]?[\d.]+ E-[\d.]+( F\d+)?\s*$'), 'removed: wipe move')]
+EXT = re.compile(r'^G1 X[-+]?[\d.]+ Y[-+]?[\d.]+ E[\d.]+( F\d+)?$')
 kinds = collections.Counter(); bad = []
 if not reordered:
     a = i0; b = j0
     while a < ie and b < je:
         if o[a] == n[b]: a += 1; b += 1; continue
         if strip(o[a]) == strip(n[b]):
-            kinds['F changed' if o[a].startswith('G') else ('fan S changed' if o[a].startswith('M106') else 'M73 R changed')] += 1; a += 1; b += 1; continue
+            kinds['F changed' if o[a].startswith('G') else ('fan S changed' if o[a].startswith('M106') else ('accel S changed' if o[a].startswith('M204') else 'M73 R changed'))] += 1; a += 1; b += 1; continue
         if o[a].startswith('M73 P') and n[b].startswith('M73 P'): kinds['M73 R changed'] += 1; a += 1; b += 1; continue
         t = n[b]
+        rem_lab = lambda q: next((lab for rx, lab in REMOVABLE if rx.match(o[q].split(';')[0].strip())), None)
+        jj = None
+        for j in range(1, 8):          # removed original lines, followed by a line that matches again
+            if a + j >= ie or not rem_lab(a + j - 1): break
+            if o[a + j] == n[b] or strip(o[a + j]) == strip(n[b]) or \
+                    (o[a + j].startswith('G1 X') and ' Z' in o[a + j] and stripz(o[a + j]) == stripz(n[b])):
+                jj = j; break
+        if jj:
+            for q in range(a, a + jj): kinds[rem_lab(q)] += 1
+            a += jj; continue
         if re.match(r'^(M106 S[\d.]+|G1 F\d+|M204 S\d+|; LINE_WIDTH: [\d.]+|G1 E-?[\d.]+ F\d+ ; PO anti-string (un)?retract)$', t):
             kinds['inserted: ' + t.split()[0] + (' (anti-string)' if 'anti-string' in t else '')] += 1; b += 1; continue
+        if o[a].startswith('G1 X') and ' Z' in o[a] and stripz(o[a]) == stripz(n[b]):
+            kinds['Z removed from travel'] += 1; a += 1; b += 1; continue
+        if t[:3] in ('G2 ', 'G3 ') and ' E' in t and EXT.match(o[a].split(';')[0].strip()):
+            w = words(t); want = Decimal(w['E']); es = Decimal(0); q = a
+            while q < ie and EXT.match(o[q].split(';')[0].strip()):
+                es += Decimal(words(o[q])['E']); q += 1
+                wq = words(o[q - 1])
+                if wq['X'] == w['X'] and wq['Y'] == w['Y'] and es == want: break
+            if es == want and q > a + 1:
+                kinds['arc (replaces G1 lines)'] += 1; kinds['G1 lines merged into arcs'] += q - a; a = q; b += 1; continue
+        hit = next((lab for rx, lab in REMOVABLE if rx.match(o[a].split(';')[0].strip()) or rx.match(o[a].strip())), None)
+        if hit:
+            kinds[hit] += 1; a += 1; continue
         bad.append((a + 1, o[a], n[b])); a += 1; b += 1
         if len(bad) > 5: break
-else:
-    for x, y in zip(lo, ln):
-        isx = lambda t: E.search(t.split(';')[0]) and float(E.search(t.split(';')[0]).group(1)) > 0 and re.search(r'\s[XY][-+]?[\d.]', t.split(';')[0])
-        ex = sorted(strip(t) for t in x if isx(t))
-        ey = sorted(strip(t) for t in y if isx(t))
-        if ex != ey: bad.append(('layer', len(ex), len(ey))); break
 res['line_changes'] = dict(kinds); res['unexpected_changes'] = bad
 fo = [float(m) for t in o if t.startswith('M106 S') for m in re.findall(r'S([\d.]+)', t)]
 fn = [float(m) for t in n if t.startswith('M106 S') for m in re.findall(r'S([\d.]+)', t)]
 res['max_fan_S_orig/new'] = (max(fo), max(fn))
 Fs = lambda L: [float(m) for t in L if t.startswith(('G1', 'G0', 'G2', 'G3')) for m in re.findall(r'\sF([\d.]+)', t)]
 res['max_F_orig/new'] = (max(Fs(o)), max(Fs(n)))
-ok = (res['layers_orig'] == res['layers_new'] and res['max_layer_E_diff'] < 1e-6 and res['max_layer_positiveE_diff'] < 1e-6 and res['start_block_identical']
-      and res['end_block_identical'] and res['temperature_lines_identical'] and res['protected_cmds_identical'] and not bad)
+ok = (res['layers_orig'] == res['layers_new'] and not e_bad and res['start_block_identical'] and res['end_block_identical']
+      and res['temperature_lines_identical'] and res['protected_cmds_identical'] and not geo_bad and not bad)
 for k, v in res.items(): print('%-30s %s' % (k, v))
 print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)

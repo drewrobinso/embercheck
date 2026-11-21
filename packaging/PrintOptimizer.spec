@@ -17,7 +17,7 @@ a = Analysis(
     pathex=[SRC],
     binaries=[],
     datas=[(os.path.join(SPECPATH, 'icon.ico'), '.'), (os.path.join(ROOT, 'LICENSE'), '.')],
-    hiddenimports=['secrets', 'ui', 'progress', 'bambu_presets', 'report', 'materials', 'emitter', 'optimizer', 'gcode_model'],
+    hiddenimports=['secrets', 'ui', 'progress', 'bambu_presets', 'report', 'materials', 'emitter', 'optimizer', 'gcode_model', 'project_info'],
     excludes=['matplotlib', 'scipy', 'pandas', 'PIL', 'IPython', 'pytest'],
     noarchive=False,
 )

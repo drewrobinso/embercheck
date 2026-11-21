@@ -20,7 +20,7 @@ from emitter import emit, validate, rewrite_m73  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 
 
 def windows_documents_dir():
@@ -102,7 +102,7 @@ def process_text(text, st, name, log, progress=noop):
         tries += 1
         over = ta - tb * (1 + st.time_budget)
         log('time budget: output %.1fs over the %s limit, trimming more' % (over, st.goal))
-        left = opt.enforce_budget(st.time_budget, extra_s=over * 1.5 + 0.0005 * tb)
+        left = opt.enforce_budget(st.time_budget, extra_s=-getattr(opt, 'credit_s', 0.0) + over * 1.5 + 0.0005 * tb)
         opt.accel_savings()
         out, est, m73n, errs, metrics, ta = build()
         if left > 0 and ta > tb * (1 + st.time_budget):
@@ -119,6 +119,7 @@ def process_text(text, st, name, log, progress=noop):
     need = [opt.opt[i].time for i in range(opt.nl) if opt.base[i].Tmax is not None and opt.base[i].Tmax > hi]
     cat, flow_lim, ext_t = R.time_breakdown(opt)
     bs = getattr(opt, 'budget_stats', {}) or {}
+    rs = opt.reorder_stats; hs = getattr(opt, 'hop_stats', {}) or {}
     dec = opt.decisions
     sped = sum(1 for d in dec if d.startswith('speed') or (d.startswith('cold->s') and not d.startswith('cold->s1.00')))
     slowed = sum(1 for d in dec if d.startswith('hot->s') and not d.startswith('hot->s1.00')) + dec.count('hot-residual')
@@ -137,9 +138,15 @@ def process_text(text, st, name, log, progress=noop):
             bs.get('kept_hot_layers', 0), bs.get('dropped_overhangs', 0))) if st.time_budget is not None else
         'Goal quality: no print-time limit, thermal and overhang quality first',
         '%d anti-string retractions added' % opt.travel['fixed'],
-        '%d infill runs re-ordered' % (len(opt.order) and opt.reorder_stats['reordered_runs'] if st.reorder else 0),
+        ('Smart travel order: %d infill runs re-ordered (nearest neighbour + 2-opt), travel %.0f &rarr; %.0f mm, ~%s saved' % (
+            rs['reordered_runs'], rs['travel_before'], rs['travel_after'], R.fmt_t(rs.get('time_saved', 0.0))) if st.reorder else 'Travel order unchanged'),
+        ('Z-hops skipped on %d short in-infill travels, retract+wipe pairs skipped on %d (net E unchanged), ~%s saved' % (
+            hs.get('hops_skipped', 0), hs.get('retracts_skipped', 0), R.fmt_t(hs.get('time_saved', 0.0))) if st.hops else 'Z-hops and retractions unchanged'),
+        ('Arc fitting: %d arcs replace %d G1 segments (tolerance %g mm, exact E)' % (est.get('arcs', 0), est.get('arc_segments', 0),
+            st.arc_tol or min(0.05, max(0.005, g.cfg('resolution', 0.01) or 0.01))) if getattr(opt, 'arcs_on', False) else
+         'Arc fitting off (%s)' % ('this printer does its own curve planning, Bambu Studio also turns arcs off for it' if st.arcs == 'auto' else 'turned off')),
         '%d M73 remaining-time values updated' % m73n,
-        'Nothing else touched: no temperatures, no E values, no start/end/AMS/timelapse G-code.']
+        'Nothing else touched: no temperatures, extrusion per layer exactly the same (skipped retract/un-retract pairs and arcs keep the exact E sum), no start/end/AMS/timelapse G-code.']
     summary = {'t_before': tb, 't_after': ta, 'dt_pct': 100 * (ta - tb) / tb if tb else 0, 'bambu_time': bt,
                'goal': st.goal, 'time_budget_pct': None if st.time_budget is None else 100 * st.time_budget,
                'acc_saved_s': getattr(opt, 'acc_saved', 0.0), 'acc_saved_pct': 100 * getattr(opt, 'acc_saved', 0.0) / tb if tb else 0,
@@ -147,6 +154,15 @@ def process_text(text, st, name, log, progress=noop):
                'acc_target_max': getattr(opt, 'acc_target_max', 0),
                'budget_kept_hot': bs.get('kept_hot_layers', 0), 'budget_dropped_overhangs': bs.get('dropped_overhangs', 0),
                'overhangs_slowed': len(opt.ovf),
+               'reorder_runs': rs.get('reordered_runs', 0) if st.reorder else 0,
+               'travel_saved_mm': (rs['travel_before'] - rs['travel_after']) if st.reorder else 0.0,
+               'travel_saved_s': rs.get('time_saved', 0.0) if st.reorder else 0.0,
+               'hops_skipped': hs.get('hops_skipped', 0), 'retracts_skipped': hs.get('retracts_skipped', 0),
+               'hop_saved_s': hs.get('time_saved', 0.0),
+               'arcs_on': bool(getattr(opt, 'arcs_on', False)), 'arcs': est.get('arcs', 0), 'arc_segments': est.get('arc_segments', 0),
+               'arcs_note': '' if getattr(opt, 'arcs_on', False) else ('printer does its own curve planning' if st.arcs == 'auto' else 'turned off'),
+               'bytes_before': len(text), 'bytes_after': len(out) if out else len(text),
+               'm204_before': text.count('\nM204'), 'm204_after': out.count('\nM204') if out else 0,
                'hot_before': hot_b, 'hot_after': hot_a, 'cold_before': cold_b, 'cold_after': cold_a,
                'hot_layer_time_needed': int(max(need) + 0.999) if need else None, 'breakdown': cat,
                'flow_limited_share': flow_lim / ext_t if ext_t else 0,
@@ -184,6 +200,12 @@ def card_data(summ, name, report_path, dry_run):
             'cold_before': summ.get('cold_before', 0), 'cold_after': summ.get('cold_after', 0),
             'overhang_adjusted': summ.get('overhang_adjusted', 0), 'goal': summ.get('goal'),
             'acc_saved_s': summ.get('acc_saved_s', 0.0), 'acc_saved_pct': summ.get('acc_saved_pct', 0.0),
+            'travel_saved_s': summ.get('travel_saved_s', 0.0), 'travel_saved_mm': summ.get('travel_saved_mm', 0.0),
+            'hops_skipped': summ.get('hops_skipped', 0), 'retracts_skipped': summ.get('retracts_skipped', 0),
+            'hop_saved_s': summ.get('hop_saved_s', 0.0), 'arcs_on': summ.get('arcs_on', False), 'arcs': summ.get('arcs', 0),
+            'arc_segments': summ.get('arc_segments', 0), 'arcs_note': summ.get('arcs_note', ''),
+            'm204_before': summ.get('m204_before', 0), 'm204_after': summ.get('m204_after', 0),
+            'bytes_before': summ.get('bytes_before', 0), 'bytes_after': summ.get('bytes_after', 0),
             'open_air': summ.get('travel', {}).get('open_air', 0),
             'open_air_unretracted': summ.get('travel', {}).get('open_air_unretracted', 0),
             'recommendations': [list(r) for r in recs[:3]], 'report': report_path, 'errors': errs,
@@ -372,6 +394,9 @@ def main(argv=None):
     ap.add_argument('--no-speed', action='store_true'); ap.add_argument('--no-fan', action='store_true')
     ap.add_argument('--no-overhang', action='store_true'); ap.add_argument('--no-bridge-fan', action='store_true')
     ap.add_argument('--no-accel', action='store_true', help='keep the slicer\'s accelerations (no M204 changes)')
+    ap.add_argument('--no-reorder', action='store_true', help='keep the slicer\'s infill island order')
+    ap.add_argument('--no-hop-skip', action='store_true', help='keep every Z-hop and retraction')
+    ap.add_argument('--arcs', choices=['auto', 'on', 'off'], default='auto', help='arc fitting (auto: off on printers with firmware curve planning)')
     ap.add_argument('--no-time-limit', action='store_true', help='let speed/balanced add time (old behaviour)')
     ap.add_argument('--reorder', action='store_true', help='re-order infill islands to shorten travel')
     ap.add_argument('--fix-strings', action='store_true', help='add retraction to un-retracted open-air travels')
@@ -396,7 +421,7 @@ def main(argv=None):
         problems = []
         if not HAVE_GEOM:
             problems.append('geometry: %s' % GEOM_ERROR)
-        for mod in ('tkinter', 'ui', 'bambu_presets', 'report'):
+        for mod in ('tkinter', 'ui', 'bambu_presets', 'report', 'project_info'):
             try:
                 __import__(mod)
             except Exception as ex:
@@ -451,7 +476,8 @@ def main(argv=None):
 
     st = Settings(goal=a.goal, max_speedup=a.max_speedup, material=a.material, chamber=a.chamber,
                   skip_layers=a.skip_layers, speed=not a.no_speed, fan=not a.no_fan, overhang=not a.no_overhang,
-                  bridge_fan=not a.no_bridge_fan, reorder=a.reorder, fix_strings=a.fix_strings, m73=not a.no_m73,
+                  bridge_fan=not a.no_bridge_fan, reorder=True if a.reorder else (False if a.no_reorder else None),
+                  hops='none' if a.no_hop_skip else None, arcs=a.arcs, fix_strings=a.fix_strings, m73=not a.no_m73,
                   accel=not a.no_accel, time_budget='none' if a.no_time_limit else 'goal')
     st.dry_run = a.dry_run
     if not HAVE_GEOM:

@@ -334,6 +334,15 @@ def show_summary(path, auto_close=60, pos=None):
     info = []
     if d.get('acc_saved_s'):
         info.append('Faster acceleration on infill/inner walls saved %s (%.1f%%)' % (_fmt_s(d['acc_saved_s']), d.get('acc_saved_pct', 0.0)))
+    if d.get('travel_saved_s', 0) >= 0.5:
+        info.append('Smart travel order saved %s (%.0f mm less travel)' % (_fmt_s(d['travel_saved_s']), d.get('travel_saved_mm', 0.0)))
+    if d.get('hops_skipped') or d.get('retracts_skipped'):
+        info.append('Skipped %d Z-hops and %d retractions on short infill travels: %s saved' % (
+            d.get('hops_skipped', 0), d.get('retracts_skipped', 0), _fmt_s(d.get('hop_saved_s', 0.0))))
+    if d.get('arcs_on'):
+        info.append('Arc fitting: %d arcs replace %d moves' % (d.get('arcs', 0), d.get('arc_segments', 0)))
+    elif d.get('arcs_note'):
+        info.append('Arc fitting off: %s' % d['arcs_note'])
     if d.get('bambu_time'):
         info.append('Slicer estimate %s · time change is from the optimizer\'s motion model' % d['bambu_time'])
     if info:
@@ -365,6 +374,16 @@ def show_summary(path, auto_close=60, pos=None):
     inner.update_idletasks()
     rec_h = inner.winfo_reqheight()
 
+    # small, unobtrusive support link (opens the browser only when clicked)
+    try:
+        from project_info import SUPPORT_URL
+    except Exception:
+        SUPPORT_URL = None
+    if SUPPORT_URL:
+        sup = tk.Label(bot, text='\u2665 Support this project', bg=BG, fg=DIM, font=f_small, cursor='hand2')
+        sup.pack(side='left', padx=(0, px(10)))
+        sup.bind('<Button-1>', lambda _e: webbrowser.open(SUPPORT_URL))
+        sup.bind('<Enter>', lambda _e: sup.config(fg=FG)); sup.bind('<Leave>', lambda _e: sup.config(fg=DIM))
     cd = tk.Label(bot, text='', bg=BG, fg=DIM, font=f_small); cd.pack(side='left')
     state = {'left': auto_close, 'active': auto_close > 0}
 

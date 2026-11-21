@@ -1,6 +1,6 @@
 """Analysis + optimisation engine (thermal model, speed/fan plan, overhangs, travel, stringing)."""
 import math
-from gcode_model import (GcodeFile, Kinematics, estimate_times, FEATURES_SPEEDUP, FEATURES_SLOWDOWN,
+from gcode_model import (GcodeFile, Kinematics, estimate_times, seg_time, FEATURES_SPEEDUP, FEATURES_SLOWDOWN,
                          FEATURES_REORDER, WALLS, split_comment, parse_words)
 import materials as M
 
@@ -44,11 +44,24 @@ class Settings:
         self.margin = None              # deg C safety margin inside window (None -> goal default)
         self.accel = True               # speed-aware acceleration on internal features
         self.time_budget = 'goal'       # max print-time increase as a fraction; 'goal' -> goal default, None = no limit
+        self.reorder = 'goal'           # smart travel order of infill islands (all goals)
+        self.hops = 'goal'              # skip wasted Z-hops / retracts on short in-infill travels: None | 'hop' | 'hop+retract'
+        self.hop_max_travel = None      # mm; None -> goal default
+        self.arcs = 'auto'              # arc fitting: 'auto' (off on printers with firmware curve planning) | 'on' | 'off'
+        self.arc_tol = None             # mm; None -> the profile's resolution (0.005..0.05)
         self.__dict__.update({k: v for k, v in kw.items() if v is not None})
         if self.max_speedup is None:
             self.max_speedup = {'quality': 1.0, 'balanced': 1.25, 'speed': 1.5}[self.goal]
         if self.margin is None:
             self.margin = 5.0 if self.goal == 'quality' else 3.0
+        if self.reorder == 'goal':
+            self.reorder = True
+        if self.hops == 'goal':
+            self.hops = {'speed': 'hop+retract', 'balanced': 'hop', 'quality': None}[self.goal]
+        if self.hops == 'none':
+            self.hops = None
+        if self.hop_max_travel is None:
+            self.hop_max_travel = {'speed': 10.0, 'balanced': 5.0, 'quality': 0.0}[self.goal]
         if self.time_budget == 'none':
             self.time_budget = None
         if self.time_budget == 'goal':
@@ -63,6 +76,19 @@ ACCEL_FEATURES = {'speed': {'Sparse infill', 'Internal solid infill', 'Inner wal
                   'quality': {'Sparse infill', 'Internal solid infill'}}
 ACCEL_FACTOR = {'speed': None, 'balanced': 1.5, 'quality': 1.2}   # None -> up to the machine maximum
 ACCEL_MIN_LAYER = 3
+
+# Z-hop / retract skipping: only travels from one infill line to the next infill line of the same feature,
+# fully over the layer's printed area (covered by later layers, so the nozzle cannot scar a visible surface)
+HOP_FEATURES = {'Sparse infill', 'Internal solid infill'}
+HOP_MIN_LAYER = 3
+# printers whose firmware does its own curve planning: Bambu Studio switches its arc fitting off for these
+CURVE_PLANNING_MODELS = ('H2D', 'H2S', 'H2C', 'X2D', 'H2D Pro', 'A2L')
+
+
+def arcs_enabled(st, printer_model):
+    if st.arcs == 'on': return True
+    if st.arcs == 'off': return False
+    return not any(m in (printer_model or '') for m in CURVE_PLANNING_MODELS)
 
 
 class LayerEval:
@@ -267,6 +293,8 @@ class Optimizer:
             pend = []; last = None   # last = (feature, orig accel, target) of the previous raised extrusion
             for ln in self.L[k]['lines']:
                 if ln.kind != 'motion': continue
+                if ln.in_wipe and not ln.prot and ln.layer >= 0 and last is not None and ln.accel == last[1]:
+                    pend.append(ln.i); continue     # a wipe inside a raised run keeps the run's acceleration
                 if not ln.opt or ln.layer < 0 or not ln.accel:
                     pend = []; last = None; continue
                 if ln.is_ext:
@@ -586,7 +614,9 @@ class Optimizer:
 
     # ------------------------------------------------------------ reorder (TSP within feature runs)
     def plan_reorder(self):
-        self.reorder_stats = {'runs': 0, 'chunks': 0, 'reordered_runs': 0, 'travel_before': 0.0, 'travel_after': 0.0}
+        self.reorder_stats = {'runs': 0, 'chunks': 0, 'reordered_runs': 0, 'travel_before': 0.0, 'travel_after': 0.0,
+                              'time_saved': 0.0}
+        self.reordered_idx = set()
         for k in range(self.nl):
             self.progress('reorder', k / max(1, self.nl))
             d = self.L[k]; lines = d['lines']; a = d['a']
@@ -646,7 +676,7 @@ class Optimizer:
                     lns = [G[i] for i in c]
                     tr = next(l for l in lns if l.is_travel)
                     mot = [l for l in lns if l.kind == 'motion' and l.x is not None]
-                    info.append(((tr.x, tr.y), (mot[-1].x, mot[-1].y)))
+                    info.append(((tr.x, tr.y), (mot[-1].x, mot[-1].y), tr.effF, tr.accel))
                 hm = [G[i] for i in head if G[i].kind == 'motion']
                 if not hm: continue
                 start = (hm[-1].x, hm[-1].y)
@@ -687,6 +717,15 @@ class Optimizer:
                     self.reorder_stats['travel_after'] += cb
                     self.reorder_stats['reordered_runs'] += 1
                     if self.st.reorder:
+                        def tcost(seq):
+                            p = start; c = 0.0
+                            for s_ in seq:
+                                dd = math.dist(p, info[s_][0]); v = (info[s_][2] or 12000) / 60.0
+                                a_ = min(info[s_][3] or self.kin.amax_travel, self.kin.amax_travel)
+                                c += seg_time(dd, min(v, self.kin.vmax_xy), a_, self.kin.jerk, self.kin.jerk); p = info[s_][1]
+                            return c
+                        self.reorder_stats['time_saved'] += max(0.0, tcost(orig) - tcost(best))
+                        self.reordered_idx.update(reg)
                         newidx = list(head) + [i for s_ in best for i in movable[s_]] + (list(tail) if tail else [])
                         pos = order.index(reg[0])
                         order[pos:pos + len(reg)] = newidx
@@ -694,6 +733,87 @@ class Optimizer:
                 else:
                     self.reorder_stats['travel_after'] += c0
             if changed: self.order[k] = order
+
+    # ------------------------------------------------------------ Z-hop / retract skipping
+    def plan_hops(self):
+        """Find retract/Z-hop groups between two infill lines of the same feature whose travel is short and stays over
+        the layer's printed area. 'hop': drop the Z lift and lower (travel at layer height). 'hop+retract': also drop
+        the wipe, retract and de-retract when their E adds up to exactly 0, so the net E of the group is unchanged.
+        Works on the final emission order (after travel re-ordering)."""
+        self.hop_skip = set(); self.hop_strip_z = set()
+        self.hop_stats = {'groups': 0, 'hops_skipped': 0, 'retracts_skipped': 0, 'time_saved': 0.0}
+        mode = self.st.hops
+        if not mode or not HAVE_GEOM or self.st.hop_max_travel <= 0: return
+        G = self.g.lines; maxd = self.st.hop_max_travel
+        ok_cmd = ('G0', 'G1', 'G2', 'G3', 'G17', 'M204', 'M73', '')
+        for k in range(max(HOP_MIN_LAYER, self.st.skip_layers), self.nl):
+            self.progress('hops', k / max(1, self.nl))
+            d = self.L[k]; reg = d['region']
+            if reg is None: continue
+            seq = self.order.get(k, list(range(d['a'], d['b'])))
+            durs = None; last = None
+            for p, i in enumerate(seq):
+                if not G[i].is_ext: continue
+                if last is not None and p - last > 1:
+                    grp = seq[last:p + 1]
+                    if durs is None:
+                        dd, _ = estimate_times(d['lines'], self.kin); durs = {ln.i: t for ln, t in zip(d['lines'], dd)}
+                    self._hop_group(grp, reg, mode, maxd, ok_cmd, durs)
+                last = p
+
+    def _hop_group(self, grp, reg, mode, maxd, ok_cmd, durs):
+        G = self.g.lines
+        E1, E2 = G[grp[0]], G[grp[-1]]
+        if not (E1.opt and E2.opt and E1.feature in HOP_FEATURES and E2.feature == E1.feature): return
+        wipes, rets, lifts, lowers, derets, trav = [], [], [], [], [], []
+        for i in grp[1:-1]:
+            ln = G[i]
+            if ln.prot or ln.i in self.inserts_before: return
+            if ln.kind == 'motion':
+                xy = ln.x is not None and math.hypot(ln.x - ln.x0, ln.y - ln.y0) > 1e-9
+                if ln.in_wipe:
+                    if not (ln.is_wipe or (ln.e is None and xy)): return
+                    wipes.append(ln)
+                elif ln.is_travel:
+                    trav.append(ln)
+                elif xy:
+                    return
+                elif ln.e is not None:
+                    if ln.e < 0 and not trav: rets.append(ln)
+                    elif ln.e > 0 and trav: derets.append(ln)
+                    else: return
+                elif ln.w is not None and 'Z' in ln.w:
+                    if ln.cmd in ('G2', 'G3') and ('X' in ln.w or 'Y' in ln.w): return
+                    (lowers if trav else lifts).append(ln)
+                elif ln.w is not None and set(ln.w.keys()) <= {'F'}:
+                    pass
+                else:
+                    return
+            elif ln.kind in ('accel', 'other') or ln.cmd in ok_cmd:
+                if ln.kind == 'other' and ln.cmd not in ok_cmd: return
+            else:
+                return
+        if len(trav) != 1: return
+        T = trav[0]
+        self.hop_stats['groups'] += 1
+        z0 = E1.z
+        hop_ok = bool(lifts) and bool(lowers) and all(l.z > z0 + 1e-6 for l in lifts) and abs(T.z - lifts[-1].z) < 1e-6 \
+            and abs(lowers[-1].z - z0) < 1e-6 and abs(E2.z - z0) < 1e-6
+        e_sum = sum(l.e or 0.0 for l in wipes) + sum(l.e for l in rets) + sum(l.e for l in derets)
+        ret_ok = mode == 'hop+retract' and (rets or wipes) and derets and abs(e_sum) < 1e-6 and \
+            (hop_ok or not (lifts or lowers))
+        start = (E1.x, E1.y) if ret_ok else ((wipes[-1].x, wipes[-1].y) if wipes else (E1.x, E1.y))
+        L = math.dist(start, (T.x, T.y))
+        if L > maxd: return
+        out = float(shapely.length(shapely.difference(shapely.linestrings([start, (T.x, T.y)]), reg))) if L > 1e-6 else 0.0
+        if out > 0.05: return
+        drop = []
+        if hop_ok:
+            drop += lifts + lowers; self.hop_strip_z.add(T.i); self.hop_stats['hops_skipped'] += 1
+        if ret_ok:
+            drop += wipes + rets + derets; self.hop_stats['retracts_skipped'] += 1
+        for l in drop:
+            self.hop_skip.add(l.i); self.hop_stats['time_saved'] += durs.get(l.i, 0.0)
 
     # ------------------------------------------------------------ run everything
     def run(self):
@@ -703,10 +823,14 @@ class Optimizer:
         self.plan_accel()
         self.baseline()
         self.optimise()
-        self.budget_stats = {'kept_hot_layers': 0, 'dropped_overhangs': 0, 'rounds': 0, 'over_s': 0.0}
-        if self.st.time_budget is not None:
-            self.enforce_budget(self.st.time_budget)
-        self.accel_savings()
         self.analyse_travel()
         self.plan_reorder()
+        self.plan_hops()
+        self.arcs_on = arcs_enabled(self.st, self.g.config.get('printer_model', ''))
+        # time the plan can count on from travel order and skipped hops (the final output is checked again anyway)
+        self.credit_s = self.reorder_stats.get('time_saved', 0.0) + self.hop_stats.get('time_saved', 0.0)
+        self.budget_stats = {'kept_hot_layers': 0, 'dropped_overhangs': 0, 'rounds': 0, 'over_s': 0.0}
+        if self.st.time_budget is not None:
+            self.enforce_budget(self.st.time_budget, extra_s=-self.credit_s)
+        self.accel_savings()
         return self

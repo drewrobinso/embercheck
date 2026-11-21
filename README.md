@@ -2,6 +2,10 @@
 
 Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code. Windows installer, no Python needed.
 
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/drewrobinso)
+
+What changed in each version: [CHANGELOG.md](CHANGELOG.md). How each optimization works: [docs/](docs/README.md).
+
 **Code signing policy:** see [below](#code-signing-policy).
 
 A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your PC with no cloud upload:
@@ -16,16 +20,21 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 4. **Travel and stringing.**
    - It finds travels that cross open air and checks whether each one retracts first.
    - Optionally, it adds the missing retraction (`--fix-strings`).
-   - Optionally, it re-orders infill islands within a feature to shorten travel (`--reorder`). Walls are never re-ordered.
-5. **Slicer-setting tips.** The report lists Bambu Studio settings worth changing for problems that are better fixed in the slicer.
+5. **Faster motion without touching the extrusion (1.3/1.4).**
+   - Speed-aware acceleration (M204) on infill and inner walls ([docs/acceleration.md](docs/acceleration.md)).
+   - Smart travel order: infill islands within one feature are re-ordered (nearest neighbour + 2-opt) to shorten travel. Walls are never re-ordered ([docs/travel-order.md](docs/travel-order.md)).
+   - Z-hop / retraction skip on short infill travels that stay over printed area (Speed: hop + retract, Balanced: hop only, Quality: off) ([docs/hop-retract-skip.md](docs/hop-retract-skip.md)).
+   - ArcWelder-style arc fitting (G2/G3) with the exact same E, on printers without Bambu's curve planning ([docs/arc-fitting.md](docs/arc-fitting.md)).
+6. **Slicer-setting tips.** The report lists Bambu Studio settings worth changing for problems that are better fixed in the slicer.
 
 **Rules it always follows:**
-- It only changes feedrates (F), part-fan values (M106 S) and M73 remaining-time values. It can also insert `M106` and `G1 F` lines, and net-zero retract/unretract pairs when `--fix-strings` is on.
-- It never touches: E values, temperatures, the first 2 layers' speeds, start/end G-code, AMS/filament-change blocks (M620/M621), firmware conditional blocks (M622/M623: timelapse, H2S nozzle-clumping checks), or anything before the first layer or after the end G-code.
+- It changes feedrates (F), part-fan values (M106 S), accelerations (M204) and M73 remaining-time values, and can insert `M106`, `G1 F` and `M204` lines (plus net-zero retract/unretract pairs with `--fix-strings`).
+- Inside one infill feature it may also re-order whole islands, drop the Z lift/lower (and, on Speed, the wipe + retract/un-retract pair whose E adds up to exactly 0) of short travels over printed area, and replace runs of G1 segments by G2/G3 arcs whose E is the exact decimal sum of the replaced moves.
+- It never touches: the E of any extrusion move (per-layer extrusion stays identical to the last decimal), temperatures, the first 2 layers' speeds, start/end G-code, AMS/filament-change blocks (M620/M621), firmware conditional blocks (M622/M623: timelapse, H2S nozzle-clumping checks), or anything before the first layer or after the end G-code.
 - Every output is re-parsed and checked before it is saved:
   - same number of layers
   - same extrusion per layer (to 1e-6 mm)
-  - same set of extrusion moves
+  - same set of extrusion moves (arcs are expanded back into the segments they replace and checked point by point)
   - start/end and protected blocks byte-identical
   - no extruding while retracted
   - feeds within the limits
@@ -53,6 +62,11 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
    - The finish page says what happened: how many presets were added, or that no Bambu Lab printer was found. Printers are detected from `BambuStudio.conf` (`presets.machine`, `models`) and from your user printer presets.
 3. Start Bambu Studio, pick an AI preset such as `0.20mm H2S AI Balanced`, and slice as usual.
 
+**Windows security prompts (SmartScreen and Smart App Control).** Release installers are meant to be signed through the SignPath Foundation (see [Code signing policy](#code-signing-policy)).
+- A signed installer shows *Bambu Print Optimizer* and the publisher in the Windows prompts. A new certificate or a new app can still get a SmartScreen "Windows protected your PC" warning until it builds reputation: click *More info* → *Run anyway*.
+- **Smart App Control** (Windows 11, Settings → Privacy & security → Windows Security → App & browser control) blocks unsigned apps outright and has no *Run anyway* button. Unsigned test builds (anything from `scripts/build_wine.sh` or a local build) won't run while it is **On**; use a signed release. We don't recommend turning Smart App Control off just for this tool. On older Windows 11 builds that can't be undone without resetting Windows; recent updates let you turn it back on in the same settings page, per Microsoft's [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions).
+- Never install the throw-away self-signed test builds from `dist/test-signed/`; they exist only to check the signing pipeline.
+
 **Uninstall:** Windows Settings → Apps → *Bambu Print Optimizer* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
 - The `... AI <Goal>` presets (and any old `... - Optimized` ones) that belong to this tool are deleted.
 - Presets that are synced to your Bambu cloud account (only when preset sync is on) are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
@@ -67,11 +81,12 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
   - No console window appears. The program is a Windows GUI-subsystem exe.
 - When it finishes, the G-code is written first. Then a **results card** opens in its own process, so Bambu Studio continues straight away. The card shows:
   - the status: *Optimized*, *No changes needed*, or *Check failed — G-code left unchanged*
-  - the goal, the print-time change (and how much of it came from faster acceleration), hot and cold layers before → after, the number of overhang segments slowed, and open-air and un-retracted travels
+  - the goal, the print-time change and how much of it came from each feature (acceleration, travel order, Z-hop/retraction skip, arc fitting), hot and cold layers before → after, the number of overhang segments slowed, and open-air and un-retracted travels
   - the top recommendations, in full. Long text wraps and the list scrolls if the screen is too small; the buttons are always visible.
   - The windows are DPI-aware, so they are sharp and sized correctly at 125%, 150% or 200% Windows display scaling (see `screens/ui_scaling/`, made by `test/ui_shots.py`).
   - **Open full report** (the HTML report with heat maps and charts)
   - It closes itself after 60 s unless you click it.
+  - A small *Support this project* link at the bottom left opens the project's Buy Me a Coffee page in your browser, only when clicked.
 - Reports, the summary JSON and `optimizer.log` are saved in `Documents\BambuPrintOptimizer\reports\`. A Documents folder moved to OneDrive is found through the Windows known-folder API.
 
 | Screen | |
@@ -93,7 +108,7 @@ These points were checked in the Bambu Studio source and the 02.09.01.70 binary.
 - The script edits the file in place. Bambu re-loads the preview from it, and the plate file you Print / Send / Export is packaged from it.
 - **Bambu's own time/filament estimate stays from the original slice.** The optimizer updates the `M73` remaining-time values the printer shows, and the results card and report show its own before/after model times.
 - Exit code: it always exits 0 (also on Cancel or an internal error, which leaves the G-code untouched) unless you add `--strict`.
-- The presets can be edited like any other preset. For example, add `--reorder --fix-strings` to the post-processing line.
+- The presets can be edited like any other preset. For example, add `--fix-strings` or `--arcs off` to the post-processing line.
 
 ## Without the installer (Python version)
 
@@ -112,16 +127,16 @@ Each `AI <Goal>` preset runs the optimizer with that goal. `test/goal_matrix.py`
 
 | Goal | Promise | What it does |
 |---|---|---|
-| **Speed** | Print time is **never longer** than Bambu's original. | Speeds up inner walls and infill up to 1.5× and raises their acceleration up to the machine maximum. Hot layers get more fan first (free). Slowdowns for cooling or overhangs only stay if the speed-ups pay for them; otherwise the lowest-value ones are dropped, and the hot layers left over are listed as the first recommendation. |
-| **Balanced** (default) | Fixes most hot layers, print time **at most +2%**. | Same tools with a 1.25× speed-up cap and 1.5× acceleration. If the fixes would cost more than 2%, the least important slowdowns are dropped first. |
-| **Quality** | Thermal and overhang quality first; may add time. | No feed speed-ups, a bigger temperature safety margin (5 °C), 25–50% overhangs are slowed too, acceleration only +20% and only on sparse/internal solid infill. Ends with no more hot layers than Balanced and at least as many overhang slowdowns. |
+| **Speed** | Print time is **never longer** than Bambu's original. | Speeds up inner walls and infill up to 1.5× and raises their acceleration up to the machine maximum. Smart travel order; skips Z-hop **and** retract on infill travels ≤ 10 mm over printed area. Hot layers get more fan first (free). Slowdowns for cooling or overhangs only stay if the speed-ups pay for them; otherwise the lowest-value ones are dropped, and the hot layers left over are listed as the first recommendation. |
+| **Balanced** (default) | Fixes most hot layers, print time **at most +2%**. | Same tools with a 1.25× speed-up cap and 1.5× acceleration. Smart travel order; skips only the Z-hop (keeps the retraction) on infill travels ≤ 5 mm over printed area. If the fixes would cost more than 2%, the least important slowdowns are dropped first. |
+| **Quality** | Thermal and overhang quality first; may add time. | No feed speed-ups, a bigger temperature safety margin (5 °C), 25–50% overhangs are slowed too, acceleration only +20% and only on sparse/internal solid infill. Smart travel order; every Z-hop and retraction is kept. Ends with no more hot layers than Balanced and at least as many overhang slowdowns. |
 
-The time limit is checked twice: on the plan, and again on the written G-code with the same estimator that sets the M73 remaining time. Run with `--no-time-limit` to get the old behaviour (fixes are applied whatever they cost).
+Arc fitting (`--arcs auto`) is the same for all goals. The time limit is checked twice: on the plan, and again on the written G-code with the same estimator that sets the M73 remaining time. Time saved by travel order and hop/retract skip is counted as credit, so Speed and Balanced can keep more cooling fixes inside their limit. Run with `--no-time-limit` to get the old behaviour (fixes are applied whatever they cost).
 
 **Speed-aware acceleration** (M204), applied per Bambu `;FEATURE:` type:
 - Raised: sparse infill, internal solid infill and inner walls (Quality: infill only), never above `machine_max_acceleration_extruding` from the G-code header and never below the preset's own value.
 - Never raised: outer walls, overhangs, bridges, top surfaces, the first 3 layers, wipes, and anything inside protected AMS / tool-change / timelapse blocks.
-- The slicer's value is put back at every feature change, layer change and before every protected block, and the built-in validator rejects the output if any other extrusion move has a different acceleration.
+- The slicer's value is put back at every feature change, layer change, before every protected block and before any move it didn't plan (1.4.0: wipes inside a raised run, comments and `G17` no longer force a restore, so the PETG speaker on Speed now has 3,871 M204 lines instead of 20,179 in 1.3.0; the original has 2,105), and the built-in validator rejects the output if any other extrusion move has a different acceleration.
 - The motion model includes the new acceleration, so the M73 remaining time is right. The time saved by acceleration is shown separately on the results card and in the report.
 - Hot layers never get faster acceleration: it would shorten their cooling time. `--no-accel` turns this off.
 
@@ -134,7 +149,9 @@ The time limit is checked twice: on the plan, and again on the written G-code wi
 | `--no-time-limit` | Let Speed/Balanced add whatever time the fixes cost (pre-1.3 behaviour). |
 | `--max-speedup 1.15` | Your own cap on the speed-up. |
 | `--dry-run` | Report only. |
-| `--reorder` | Re-order infill islands to shorten travel (off by default). |
+| `--no-reorder` | Keep the slicer's island order (smart travel order is on by default since 1.4.0; `--reorder` is still accepted). |
+| `--no-hop-skip` | Keep every Z-hop and retraction (no hop/retract skip). |
+| `--arcs auto / on / off` | Arc fitting. `auto` (default): on, except for printers with Bambu's curve planning (H2D, H2S, H2C, X2D, H2D Pro, A2L), where Bambu Studio also turns arcs off. |
 | `--fix-strings` | Add a retraction to un-retracted travels that cross more than 2 mm of open air (off by default). |
 | `--chamber 45` | Chamber temperature to assume (°C). Default: the profile's chamber temperature, or 35 °C for enclosed printers. |
 | `--material ASA` | Override the filament type used by the model. |
@@ -162,10 +179,18 @@ What that means:
 - Small, fast layers (spires, pins) are flagged reliably because the physics is simple. Mild cases are judgment calls.
 - Time numbers come from its own motion planner (accel + junction-speed model). On the six test slices it came out 5–20% lower than Bambu's own "model printing time", depending on the print. Use the percentage change, not the absolute minutes.
 - It **cannot re-route travels around walls**. Bambu's "Avoid crossing wall" setting does that properly, so the report recommends it.
-- Retractions and z-hops are only analysed, never removed. Removing them can cause nozzle collisions.
+- Z-hops and retractions are only removed on short infill travels (≤ 10 mm on Speed, ≤ 5 mm on Balanced, never on Quality) whose straight path stays over the layer's printed area, from layer 3 up. Walls, top surfaces, open-air travels and the first layers keep them. `--no-hop-skip` turns this off.
 - Overhang detection is geometric and somewhat stricter than Bambu's own overhang labelling. 25–50% overhangs are report-only. Above 50%, it uses the overhang speeds from your profile. Use `--no-overhang` if you disagree.
 - **No speed-ups on real prints have been measured yet.** Print a test part before trusting it on something important.
 
+
+## Support development
+
+Bambu Print Optimizer is free and stays free. If it saves you time or filament, you can support its development on Buy Me a Coffee:
+
+**https://buymeacoffee.com/drewrobinso**
+
+The results card has a small *Support this project* link with the same address; it opens the browser only when you click it. Nothing is unlocked by donating, and the tool never shows reminders.
 
 ## Privacy
 
@@ -231,60 +256,97 @@ SignPath one-time setup:
 - `src/emitter.py`: writes the new G-code, updates M73, runs the safety validation
 - `src/report.py`: HTML report with inline SVG charts and heat maps (works offline)
 - `src/materials.py`: material presets and model constants
-- `test/verify.py`: an independent checker: `python verify.py original.gcode optimized.gcode [--reordered]`
+- `src/project_info.py`: project links (Buy Me a Coffee page, repository URL)
+- `test/verify.py`: an independent checker: `python verify.py original.gcode optimized.gcode [--reordered] [--arc-tol 0.012]`. It tracks the head position itself, checks the exact decimal E per layer, the multiset of extrusion moves (with Z), expands arcs back to the original segments (vertex, midpoint, direction and sweep), and without `--reordered` also aligns the files line by line, allowing only removable hop/retract lines, arcs and changed F/S values.
+- `test/goal_matrix.py`: the goal rules and per-feature time table on the six reference prints
+- `test/ui_shots.py`: renders the windows at 100/125/150/200% scaling and checks that every button is visible
+- `docs/`: one page per optimization
 - `packaging/`: PyInstaller spec, Inno Setup script, icon, SignPath artifact configurations
 - `scripts/`: build scripts (Windows / Wine), portable zip, local test signing
 
-## Test results (box, 2026-11-21, 1.3.0)
+## Test results (box, 2026-11-21, 1.4.0)
 
 These are model and estimator results only. Nothing has been printed yet.
 
-The test G-code came from the **Bambu Studio 02.09.01.70 CLI** using the official **Bambu Lab H2S 0.4 nozzle** machine profile (including its real start/end, timelapse and filament-change templates), `0.20mm Standard @BBL H2S`, and Bambu filament profiles. The models were a 60×60 mm test plate with an 8 mm spire, a cylinder and a bridge (225 layers), and the Metra-style speaker adapter (166 layers, ~86 g PETG). 
-Results for all three goals (1.3.0, `python3 test/goal_matrix.py`). "of which accel" is the part of the time change that comes from the raised accelerations alone. The time is the optimizer's own motion model of the written G-code (the same one that sets M73).
+The test G-code came from the **Bambu Studio 02.09.01.70 CLI** using the official **Bambu Lab H2S 0.4 nozzle** machine profile (including its real start/end, timelapse and filament-change templates), `0.20mm Standard @BBL H2S`, and Bambu filament profiles. The models were a 60×60 mm test plate with an 8 mm spire, a cylinder and a bridge (225 layers), and the Metra-style speaker adapter (166 layers, ~86 g PETG).
+
+Results for all three goals (`python3 test/goal_matrix.py`; 90 optimizer runs plus 3 stress runs). The time is the optimizer's own motion model of the written G-code (the same one that sets M73).
 
 | Print | Goal | Time | of which accel | Hot layers | Cold layers | Overhangs slowed | Valid |
 |---|---|---|---|---|---|---|---|
-| tower_pla | speed | -3.02% | -2.37% | 101 → 2 | 0 → 0 | 16 | PASS |
-| tower_pla | balanced | -0.84% | -1.46% | 101 → 2 | 0 → 0 | 16 | PASS |
+| tower_pla | speed | -3.38% | -2.37% | 101 → 2 | 0 → 0 | 16 | PASS |
+| tower_pla | balanced | -0.91% | -1.46% | 101 → 2 | 0 → 0 | 16 | PASS |
 | tower_pla | quality | +3.51% | -0.51% | 101 → 2 | 0 → 0 | 26 | PASS |
-| tower_petg | speed | -7.32% | -1.15% | 44 → 0 | 8 → 8 | 16 | PASS |
-| tower_petg | balanced | -6.43% | -0.73% | 44 → 0 | 8 → 8 | 16 | PASS |
+| tower_petg | speed | -7.36% | -1.15% | 44 → 0 | 8 → 8 | 16 | PASS |
+| tower_petg | balanced | -6.45% | -0.73% | 44 → 0 | 8 → 8 | 16 | PASS |
 | tower_petg | quality | +0.06% | -0.26% | 44 → 0 | 8 → 9 | 26 | PASS |
 | tower_abs | speed | -5.63% | -0.85% | 0 → 0 | 8 → 7 | 16 | PASS |
-| tower_abs | balanced | -5.48% | -0.56% | 0 → 0 | 8 → 7 | 16 | PASS |
+| tower_abs | balanced | -5.49% | -0.56% | 0 → 0 | 8 → 7 | 16 | PASS |
 | tower_abs | quality | -0.21% | -0.21% | 0 → 0 | 8 → 8 | 26 | PASS |
-| tower_asa | speed | -4.66% | -0.85% | 98 → 96 | 4 → 4 | 16 | PASS |
+| tower_asa | speed | -4.67% | -0.85% | 98 → 96 | 4 → 4 | 16 | PASS |
 | tower_asa | balanced | -4.51% | -0.56% | 98 → 96 | 4 → 4 | 16 | PASS |
 | tower_asa | quality | +0.72% | -0.21% | 98 → 96 | 4 → 4 | 26 | PASS |
-| speaker_petg | speed | -6.21% | -4.00% | 0 → 0 | 100 → 84 | 1965 | PASS |
-| speaker_petg | balanced | -4.32% | -2.43% | 0 → 0 | 100 → 88 | 1965 | PASS |
-| speaker_petg | quality | -0.66% | -1.10% | 0 → 0 | 100 → 99 | 2187 | PASS |
-| speaker_asa | speed | -4.19% | -4.20% | 0 → 0 | 46 → 46 | 1965 | PASS |
-| speaker_asa | balanced | -2.43% | -2.51% | 0 → 0 | 46 → 46 | 1965 | PASS |
+| speaker_petg | speed | -16.30% | -4.00% | 0 → 0 | 100 → 84 | 1965 | PASS |
+| speaker_petg | balanced | -9.84% | -2.43% | 0 → 0 | 100 → 88 | 1965 | PASS |
+| speaker_petg | quality | -0.69% | -1.10% | 0 → 0 | 100 → 99 | 2187 | PASS |
+| speaker_asa | speed | -6.76% | -4.20% | 0 → 0 | 46 → 46 | 1965 | PASS |
+| speaker_asa | balanced | -3.52% | -2.51% | 0 → 0 | 46 → 46 | 1965 | PASS |
 | speaker_asa | quality | -0.68% | -1.14% | 0 → 0 | 46 → 46 | 2187 | PASS |
 
-All rules passed on every print: Speed ≤ 0%, Balanced ≤ +2% and fixes at least half of the fixable hot layers, Quality hot ≤ Balanced, Quality overhangs ≥ Balanced, and time(Speed) ≤ time(Balanced) ≤ time(Quality). Stress cases (Speed and Balanced with speed-ups and acceleration turned off, so only slowdowns are available) also stayed within their limits by dropping the lowest-value slowdowns: Speed +0.00%, Balanced +1.78%.
+All rules passed on every print, for the full runs and for every variant with a feature turned off: Speed ≤ 0%, Balanced ≤ +2% and fixes at least half of the fixable hot layers, Quality hot ≤ Balanced, Quality overhangs ≥ Balanced, and time(Speed) ≤ time(Balanced) ≤ time(Quality). Stress cases (speed-ups and acceleration off, so only slowdowns are available) stayed within their limits by dropping the lowest-value slowdowns: Speed −0.34% and −0.05%, Balanced +1.78%.
 
-Compared with 1.2.1, Speed on the ASA speaker went from +0.03% to −4.19%, and on the PLA tower from −0.81% to −3.02%.
+**Time saved by each feature.** Each column is the time with that feature turned off minus the time of the full run, as a share of the original print time (positive = the feature saves time). Arcs are measured with `--arcs on` forced (the H2S default is off), against the same run without arcs. Size is the G-code size change of the full run.
+
+| Print | Goal | Total | Accel | Travel order | Z-hop/retract skip | Arcs (forced on) | hops / retracts skipped | arcs (segments) | M204 lines | size |
+|---|---|---|---|---|---|---|---|---|---|---|
+| tower_pla | speed | -3.38% | 2.21% | 0.01% | 0.36% | 0.00% | 52 / 52 | 0 (0) | 1391 → 2636 | +0.8% |
+| tower_pla | balanced | -0.91% | 1.35% | 0.00% | 0.07% | 0.00% | 14 / 0 | 0 (0) | 1391 → 2636 | +1.1% |
+| tower_pla | quality | +3.51% | 0.51% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2045 | +0.5% |
+| tower_petg | speed | -7.36% | 0.64% | 0.00% | 0.05% | 0.00% | 10 / 10 | 0 (0) | 1391 → 2679 | +1.1% |
+| tower_petg | balanced | -6.45% | 0.61% | 0.00% | 0.02% | 0.00% | 5 / 0 | 0 (0) | 1391 → 2679 | +1.1% |
+| tower_petg | quality | +0.06% | 0.26% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2127 | +0.6% |
+| tower_abs | speed | -5.63% | 0.27% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2686 | +1.2% |
+| tower_abs | balanced | -5.49% | 0.31% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2686 | +1.2% |
+| tower_abs | quality | -0.21% | 0.21% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2119 | +0.7% |
+| tower_asa | speed | -4.67% | 0.27% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2669 | +1.2% |
+| tower_asa | balanced | -4.51% | 0.31% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2669 | +1.2% |
+| tower_asa | quality | +0.72% | 0.21% | 0.00% | 0.00% | 0.00% | 0 / 0 | 0 (0) | 1391 → 2109 | +0.6% |
+| speaker_petg | speed | -16.30% | 3.86% | 0.01% | 10.05% | -0.01% | 6855 / 6787 | 621 (2787) | 2105 → 3871 | -7.2% |
+| speaker_petg | balanced | -9.84% | 2.43% | -0.01% | 5.49% | -0.01% | 4959 / 0 | 621 (2787) | 2105 → 3871 | -1.9% |
+| speaker_petg | quality | -0.69% | 1.10% | 0.03% | 0.00% | -0.01% | 0 / 0 | 621 (2787) | 2105 → 2915 | +0.1% |
+| speaker_asa | speed | -6.76% | 4.19% | -0.02% | 2.56% | -0.01% | 1724 / 1708 | 622 (2790) | 2105 → 3857 | -1.8% |
+| speaker_asa | balanced | -3.52% | 2.47% | -0.00% | 1.08% | -0.01% | 926 / 0 | 622 (2790) | 2105 → 3815 | -0.2% |
+| speaker_asa | quality | -0.68% | 1.14% | 0.01% | 0.00% | -0.01% | 0 / 0 | 622 (2790) | 2105 → 2871 | +0.1% |
+
+What this shows:
+- **Z-hop/retract skip** is the big new win on the speakers: their sparse infill has ~8,100 wipe + retract + spiral-lift groups, and 6,855 of them are short travels over printed area. Speed skips hop and retract (−10.05% on PETG, −2.56% on ASA); Balanced skips only the hop (−5.49% / −1.08%). On the towers it is small (0–0.36%).
+- **Smart travel order** shortened the re-orderable infill travel (for example 2,046 mm on the PETG speaker), but on these prints it is worth only ±0.03% of the time. Bambu's own order is already good here; prints with many separate infill islands per layer gain more.
+- **Arc fitting** replaced 2,787 segments by 621 arcs on the speakers and nothing on the towers (they are straight lines). In our motion model it saves no time (an arc has the same length as its segments); on printers without curve planning its benefit is fewer, smoother commands. It is off by default on the H2S.
+- **Acceleration** results are the same as in 1.3.0. The M204 changes in 1.4.0 removed most of the extra lines (PETG speaker Speed: 20,179 → 3,871; PLA tower Speed: 2,842 → 2,636) without changing any time result.
+- Speed on the PETG speaker went from −6.21% (1.3.0) to −16.30%, and on the ASA speaker from −4.19% to −6.76%. The towers improved by 0–0.4 points.
 
 Notes:
 - Tower ASA: the spire is already at Bambu's minimum speed and the ASA fan cap is 40%, so 96 layers stay flagged even on Quality, and the report recommends a cooling tower or multiple copies.
-- Speakers: 25–39% of extrusion time is at the filament's flow limit, so most of the gain comes from acceleration. The big flange layers are "cold" and need a warmer chamber, which post-processing can't provide.
+- Speakers: 25–39% of extrusion time is at the filament's flow limit, so most of the gain comes from acceleration and the travel moves. The big flange layers are "cold" and need a warmer chamber, which post-processing can't provide.
 
 Every output passed both the built-in validator and the independent `verify.py`:
-- same layer count
-- per-layer extrusion difference 0.0 mm
+- same layer count, per-layer extrusion difference exactly 0 (decimal sum)
+- the same extrusion moves as a multiset (with Z); every arc expands back into the original segments within 0.012 mm
 - start/end/temperature/AMS/timelapse lines identical
-- only F, fan S and M73 R values changed, plus inserted `G1 F` / `M106` / `M204` lines
 - the acceleration in effect at every feature change, layer change and AMS block is the slicer's own, and never above the machine maximum
+- runs without travel re-ordering also pass the strict line-by-line alignment (only hop/retract lines removed, arcs, and F/S values changed)
+- tamper tests: changing one arc's E by 0.00001, flipping an arc's direction, or changing one un-retract's E all make `verify.py` FAIL
 
-With `--reorder --fix-strings`:
-- travel in re-orderable infill runs went down 0.7–2.4% (for example, 83.8 m → 81.7 m on the speaker)
-- 2–12 retractions were added on un-retracted open-air travels
-- extrusion moves stayed identical as a set, and still passed both checks
+A 12-case regression (each print with the default Balanced goal, and with `--goal speed --fix-strings --arcs on`) also passed both checks.
 
+The Windows build was tested under Wine 10 on the build box. Not yet on a real Windows PC.
 
-The Windows build was tested under Wine 10 on the build box. Not yet on a real Windows PC:
+1.4.0 (`PrintOptimizer-Setup-1.4.0.exe`, unsigned local build):
+- The frozen exe `--self-test` passed, both from `dist\` and after a silent install.
+- Silent install created the 9 H2S presets in both user folders of the test prefix; silent uninstall removed them and the program files (the preset backups are kept).
+- The frozen exe (Speed, PETG speaker) produced G-code **byte-identical** to the Linux Python run, and it passed `verify.py`.
+
+Earlier versions (1.1–1.3) also covered:
 - Silent and interactive install, upgrade in place, and uninstall all worked.
 - The presets were created for the configured printers and later removed. A user's own preset with the same name was left untouched.
 - The frozen exe, run the way Bambu runs it (temp file, `SLIC3R_PP_*` variables), produced G-code **byte-identical** to the Linux Python run. It passed `verify.py`.

@@ -29,6 +29,26 @@ def set_S(text, S):
     return (code2.rstrip() + (' ' + com if com else '')) + nl
 
 
+def _harmless(ln):
+    """Lines that neither move the head nor change machine state: blank lines, comments, plane select."""
+    t = ln.text.strip()
+    return ln.kind != 'motion' and (not t or (t.startswith(';') and not t.startswith('; WIPE_END')) or
+                                    t.split()[0] in ('G17', 'G18', 'G19', 'M73'))
+
+
+def _next_move_planned(seq, cnt, G, accplan):
+    """True if every move of the wipe block that starts after seq[cnt] keeps the raised acceleration."""
+    seen = False
+    for q in seq[cnt + 1:cnt + 60]:
+        ln = G[q]
+        if ln.text.startswith('; WIPE_END'): return seen
+        if ln.kind == 'motion':
+            if q not in accplan: return False
+            seen = True
+        elif not _harmless(ln): return False
+    return False
+
+
 def emit(opt, progress=None):
     g = opt.g; G = g.lines
     feeds = {}; fanpol = {}
@@ -38,6 +58,8 @@ def emit(opt, progress=None):
             if F is not None and abs(F - G[a + j].effF) > 0.5:
                 feeds[a + j] = F
         fanpol[k] = ev.fanpol
+    skip = getattr(opt, 'hop_skip', set()); strip_z = getattr(opt, 'hop_strip_z', set())
+    src = []          # source line index of every out[] entry (None = inserted by us), for the arc pass
     accplan = {i: A for i, A in getattr(opt, 'accplan', {}).items()
                if 0 <= G[i].layer < opt.nl and getattr(opt.opt[G[i].layer], 'acc', False)}
     out = []
@@ -58,6 +80,9 @@ def emit(opt, progress=None):
         if progress is not None and (cnt & 32767) == 0:
             progress('emit', cnt / nseq)
         ln = G[i]
+        if i in skip:
+            stats['lines_skipped'] = stats.get('lines_skipped', 0) + 1
+            continue
         ins = opt.inserts_before.get(i)
         # restore modal state on entering a protected / non-optimisable stretch
         if prev_opt and not ln.opt:
@@ -68,7 +93,11 @@ def emit(opt, progress=None):
                 out.append('G1 F%s\n' % fmtF(ln.effF)); out_F = ln.effF; stats['f_inserted'] += 1
         # raised acceleration never leaks into another feature or into a protected (AMS / tool-change / timelapse) block
         if out_acc is not None and orig_acc is not None and abs(out_acc - orig_acc) > 0.5 and \
-                (not ln.opt or ln.text.startswith('; FEATURE:') or ln.text.startswith('; CHANGE_LAYER')):
+                (ln.prot or ln.text.startswith('; FEATURE:') or ln.text.startswith('; CHANGE_LAYER') or
+                 (not ln.opt and ln.kind != 'accel' and not _harmless(ln) and not (ln.in_wipe and i in accplan)) or
+                 (ln.text.startswith('; WIPE_START') and not _next_move_planned(seq, cnt, G, accplan))):
+            # 1.4.0: comments, G17 and other non-motion lines no longer force a restore (they don't move the head);
+            # any move we did not plan, any protected line and every feature / layer change still restore first.
             out.append('M204 S%d\n' % int(round(orig_acc))); out_acc = orig_acc; stats['acc_restored'] += 1
         if ins:
             for t in ins:
@@ -76,6 +105,8 @@ def emit(opt, progress=None):
                 w = parse_words(split_comment(t)[0][2:])
                 if 'F' in w: out_F = w['F']
         text = ln.text
+        if i in strip_z:
+            text = strip_Z(text)
         if ln.kind == 'motion':
             want = feeds.get(i, ln.effF)
             if ln.opt:
@@ -133,9 +164,142 @@ def emit(opt, progress=None):
         if 'LINE_WIDTH:' in text and text.startswith(';'):
             try: out_w = float(text.split(':', 1)[1])
             except ValueError: pass
-        out.append(text)
+        while len(src) < len(out): src.append(None)
+        out.append(text); src.append(i)
         prev_opt = ln.opt
+    while len(src) < len(out): src.append(None)
+    if getattr(opt, 'arcs_on', False):
+        out, ast = fit_arcs(opt, out, src, progress)
+        stats.update(ast)
     return ''.join(out), stats
+
+
+def strip_Z(text):
+    code, com = split_comment(text.rstrip('\r\n'))
+    nl = text[len(text.rstrip('\r\n')):] or '\n'
+    code2 = re.sub(r'\sZ[-+]?(?:\d+\.?\d*|\.\d+)', '', ' ' + code, count=1)[1:]
+    return code2.rstrip() + (' ' + com if com else '') + nl
+
+
+# ----------------------------------------------------------------------------------------------- arc fitting
+_E_RE = re.compile(r'\sE([-+]?(?:\d+\.?\d*|\.\d+))')
+
+
+def _fmt(v, nd=3):
+    s = ('%.' + str(nd) + 'f') % v
+    s = s.rstrip('0').rstrip('.') if '.' in s else s
+    if s.startswith('0.'): s = s[1:]
+    elif s.startswith('-0.'): s = '-' + s[2:]
+    return s if s not in ('', '-') else '0'
+
+
+def _circle(p1, p2, p3):
+    ax, ay = p1; bx, by = p2; cx, cy = p3
+    d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-12: return None
+    a2 = ax * ax + ay * ay; b2 = bx * bx + by * by; c2 = cx * cx + cy * cy
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+    return ux, uy, math.hypot(ax - ux, ay - uy)
+
+
+def _arc_ok(pts, es, tol, rmin=0.5, rmax=300.0):
+    """pts: n+1 points of n segments. Returns (cx, cy, r, ccw) if one arc fits every vertex and every chord
+    (sagitta) within tol, turns one way only, sweeps < 330 deg, and the extrusion per mm is even along it."""
+    n = len(pts) - 1
+    c = _circle(pts[0], pts[n // 2 if n > 2 else 1], pts[-1])
+    if c is None: return None
+    cx, cy, r = c
+    if not (rmin <= r <= rmax): return None
+    # Use the centre exactly as it will be written (I/J rounded to 3 decimals) and keep a small margin, so the
+    # emitted arc, not just the ideal one, stays within tol of every original vertex and segment midpoint.
+    cx = pts[0][0] + round(cx - pts[0][0], 3); cy = pts[0][1] + round(cy - pts[0][1], 3)
+    r = math.hypot(pts[0][0] - cx, pts[0][1] - cy)
+    tol = tol - 0.001
+    cr = None; sweep = 0.0; prev_a = math.atan2(pts[0][1] - cy, pts[0][0] - cx)
+    lens = []
+    for k in range(1, n + 1):
+        (x0, y0), (x1, y1) = pts[k - 1], pts[k]
+        if abs(math.hypot(x1 - cx, y1 - cy) - r) > tol: return None
+        ch = math.hypot(x1 - x0, y1 - y0)
+        if ch < 1e-6 or ch > 2 * r: return None
+        if r - math.sqrt(max(0.0, r * r - (ch / 2) ** 2)) > tol: return None   # chord bow
+        if abs(math.hypot((x0 + x1) / 2 - cx, (y0 + y1) / 2 - cy) - r) > tol: return None   # midpoint
+        a = math.atan2(y1 - cy, x1 - cx)
+        da = (a - prev_a + math.pi) % (2 * math.pi) - math.pi
+        if abs(da) < 1e-9: return None
+        s_ = da > 0
+        if cr is None: cr = s_
+        elif cr != s_: return None
+        sweep += abs(da); prev_a = a; lens.append(ch)
+    if sweep > math.radians(330): return None
+    tot = sum(lens); etot = sum(es)
+    if tot <= 0 or etot <= 0: return None
+    mean = etot / tot
+    if any(abs(e / l - mean) > 0.03 * mean for e, l in zip(es, lens)): return None   # even flow along the arc
+    arc_len = r * sweep
+    if abs(arc_len - tot) > 0.01 * tot: return None
+    return cx, cy, r, cr
+
+
+def fit_arcs(opt, out, src, progress=None):
+    """ArcWelder-style: replace runs of >= 3 consecutive G1 X Y E segments (same feature, same feed, only our own
+    optimisable lines, consecutive in the original file) by G2/G3 arcs. E of each arc is the exact decimal sum of the
+    replaced E values. Vertices and chords stay within tol of the arc."""
+    from decimal import Decimal
+    G = opt.g.lines
+    tol = opt.st.arc_tol or min(0.05, max(0.005, opt.g.cfg('resolution', 0.01) or 0.01))
+    stats = {'arcs': 0, 'arc_segments': 0}
+    res = []; n = len(out); j = 0
+    def ok_line(q, first):
+        i = src[q]
+        if i is None: return False
+        ln = G[i]
+        if not (ln.opt and ln.is_ext and ln.cmd == 'G1' and ln.layer >= 0 and ln.w is not None): return False
+        if set(ln.w.keys()) - {'X', 'Y', 'E', 'F'}: return False
+        t = out[q]
+        if not first and re.search(r'\sF[-+]?[\d.]', ' ' + split_comment(t)[0]): return False
+        return ';' not in t
+    while j < n:
+        if progress is not None and (j & 65535) == 0: progress('arcs', j / max(1, n))
+        if not ok_line(j, True):
+            res.append(out[j]); j += 1; continue
+        k = j + 1
+        while k < n and ok_line(k, False) and src[k] == src[k - 1] + 1 and G[src[k]].feature == G[src[j]].feature:
+            k += 1
+        run = list(range(j, k))
+        if len(run) < 3:
+            res.extend(out[q] for q in run); j = k; continue
+        p = 0
+        while p < len(run):
+            best = None; m = p + 3
+            while m <= len(run):
+                seg = run[p:m]
+                pts = [(G[src[seg[0]]].x0, G[src[seg[0]]].y0)] + [(G[src[q]].x, G[src[q]].y) for q in seg]
+                es = [G[src[q]].e for q in seg]
+                f = _arc_ok(pts, es, tol)
+                if f is None: break
+                best = (m, f); m += 1
+            if best is None:
+                res.append(out[run[p]]); p += 1; continue
+            m, (cx, cy, r, ccw) = best
+            seg = run[p:m]
+            first, last = G[src[seg[0]]], G[src[seg[-1]]]
+            esum = sum(Decimal(_E_RE.search(' ' + split_comment(out[q])[0]).group(1)) for q in seg)
+            fw = re.search(r'\sF([-+]?[\d.]+)', ' ' + split_comment(out[seg[0]])[0])
+            line = '%s X%s Y%s I%s J%s E%s%s\n' % ('G3' if ccw else 'G2', _fmt(last.x), _fmt(last.y), _fmt(cx - first.x0),
+                                                  _fmt(cy - first.y0), _fmt_dec(esum), (' F' + fw.group(1)) if fw else '')
+            res.append(line); stats['arcs'] += 1; stats['arc_segments'] += len(seg)
+            p = m
+        j = k
+    return res, stats
+
+
+def _fmt_dec(d):
+    s = format(d.normalize(), 'f')
+    if '.' in s: s = s.rstrip('0').rstrip('.')
+    if s.startswith('0.'): s = s[1:]
+    return s
 
 
 def _fan_editable(ln, G):
@@ -166,6 +330,45 @@ def rewrite_m73(orig_g, new_text, kin, progress=None):
             t = lines[inew]
             lines[inew] = re.sub(r'(\sR)\d+', lambda m: m.group(1) + str(Rn), t, count=1); n += 1
     return ''.join(lines), n
+
+
+def _match_layer(ol, nl, opt):
+    """Same extrusion moves (start, end, Z, E) in both layers; a G2/G3 arc in the new layer must stand for a chain
+    of original segments that starts and ends where the arc does, adds up to the same E and stays on the arc."""
+    from collections import Counter, defaultdict
+    key = lambda l: (round(l.x0, 3), round(l.y0, 3), round(l.x, 3), round(l.y, 3), round(l.z or 0, 3), round(l.e, 6))
+    orig = Counter(key(l) for l in ol if l.is_ext)
+    arcs = [l for l in nl if l.is_ext and l.cmd in ('G2', 'G3') and key(l) not in orig]
+    plain = Counter(key(l) for l in nl if l.is_ext and not (l.cmd in ('G2', 'G3') and key(l) not in orig))
+    if plain - orig: return 'set of extrusion moves changed'
+    rem = orig - plain
+    if not arcs:
+        return 'set of extrusion moves changed' if rem else None
+    tol = (opt.st.arc_tol or min(0.05, max(0.005, opt.g.cfg('resolution', 0.01) or 0.01))) + 0.002
+    by = defaultdict(list)
+    for kk, cnt in rem.items():
+        by[(kk[0], kk[1], kk[4])].extend([kk] * cnt)
+    for l in arcs:
+        cx, cy = l.x0 + l.w.get('I', 0), l.y0 + l.w.get('J', 0); r = math.hypot(l.x0 - cx, l.y0 - cy)
+        cur = (round(l.x0, 3), round(l.y0, 3), round(l.z or 0, 3)); es = 0.0; ok = False; swept = 0.0
+        ccw = l.cmd == 'G3'; ang = lambda px, py: math.atan2(py - cy, px - cx)
+        for _ in range(5000):
+            lst = by.get(cur)
+            if not lst: break
+            sg = lst.pop(); es += sg[5]
+            mx, my = (sg[0] + sg[2]) / 2, (sg[1] + sg[3]) / 2
+            if abs(math.hypot(sg[2] - cx, sg[3] - cy) - r) > tol or abs(math.hypot(mx - cx, my - cy) - r) > tol: break
+            da = (ang(sg[2], sg[3]) - ang(sg[0], sg[1]) + math.pi) % (2 * math.pi) - math.pi
+            if (da > 0) != ccw: break
+            swept += abs(da)
+            cur = (sg[2], sg[3], sg[4])
+            if (sg[2], sg[3]) == (round(l.x, 3), round(l.y, 3)):
+                drawn = (ang(l.x, l.y) - ang(l.x0, l.y0)) % (2 * math.pi)
+                if not ccw: drawn = (2 * math.pi - drawn) % (2 * math.pi)
+                ok = abs(es - l.e) < 1e-6 and abs(drawn - swept) < 0.02; break
+        if not ok: return 'arc does not match the original moves'
+    if any(by.values()): return 'set of extrusion moves changed'
+    return None
 
 
 def validate(orig_g, new_text, opt, progress=None):
@@ -201,10 +404,9 @@ def validate(orig_g, new_text, opt, progress=None):
         an = sum(l.e for l in ng.lines[c:d] if l.e is not None)
         tot_E += eo
         max_layer_dE = max(max_layer_dE, abs(eo - en), abs(ao - an))
-        so = sorted((round(l.x, 3), round(l.y, 3), round(l.x0, 3), round(l.y0, 3), l.e) for l in orig_g.lines[a:b] if l.is_ext)
-        sn = sorted((round(l.x, 3), round(l.y, 3), round(l.x0, 3), round(l.y0, 3), l.e) for l in ng.lines[c:d] if l.is_ext)
-        if so != sn:
-            errs.append('layer %d: set of extrusion moves changed' % (k + 1)); break
+        err = _match_layer(orig_g.lines[a:b], ng.lines[c:d], opt)
+        if err:
+            errs.append('layer %d: %s' % (k + 1, err)); break
         for l in ng.lines[c:d]:
             if l.is_ext:
                 if abs(l.r_before) > 2e-3:

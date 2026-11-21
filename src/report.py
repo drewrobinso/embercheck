@@ -2,6 +2,10 @@
 import html, math, datetime
 from gcode_model import estimate_times
 
+def _mb(n):
+    return '%.1f MB' % (n / 1e6)
+
+
 def fmt_t(s):
     s = int(round(s)); h, r = divmod(s, 3600); m, sec = divmod(r, 60)
     return ('%dh %02dm %02ds' % (h, m, sec)) if h else ('%dm %02ds' % (m, sec))
@@ -172,6 +176,14 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
                      ('Of which acceleration', '-%s (%.1f%%, %d layers, up to %d mm/s&sup2;)' % (
                          fmt_t(k.get('acc_saved_s', 0.0)), k.get('acc_saved_pct', 0.0), k.get('acc_layers', 0), k.get('acc_target_max', 0))
                       if k.get('acc_saved_s') else 'unchanged'),
+                     ('Of which travel order', ('-%s (%.0f mm less travel, %d runs)' % (fmt_t(k.get('travel_saved_s', 0.0)),
+                         k.get('travel_saved_mm', 0.0), k.get('reorder_runs', 0))) if k.get('reorder_runs') else 'unchanged'),
+                     ('Of which hop/retract skip', ('-%s (%d Z-hops, %d retracts skipped)' % (fmt_t(k.get('hop_saved_s', 0.0)),
+                         k.get('hops_skipped', 0), k.get('retracts_skipped', 0))) if k.get('hops_skipped') or k.get('retracts_skipped') else 'unchanged'),
+                     ('Arc fitting', ('%d arcs replace %d moves' % (k.get('arcs', 0), k.get('arc_segments', 0))) if k.get('arcs_on')
+                      else 'off (%s)' % html.escape(k.get('arcs_note') or 'off')),
+                     ('G-code size / M204 lines', '%s &rarr; %s / %d &rarr; %d' % (_mb(k.get('bytes_before', 0)), _mb(k.get('bytes_after', 0)),
+                         k.get('m204_before', 0), k.get('m204_after', 0))),
                      ('Goal', html.escape((k.get('goal') or '?').capitalize()) + (
                          ' (limit: not slower)' if k.get('time_budget_pct') == 0 else
                          (' (limit: +%g%%)' % k['time_budget_pct'] if k.get('time_budget_pct') else ' (no time limit)'))),
