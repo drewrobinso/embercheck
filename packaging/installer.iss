@@ -57,11 +57,12 @@ Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cr
 
 [Icons]
 Name: "{userprograms}\Print Optimizer\Print Optimizer"; Filename: "{app}\{#AppExe}"; Comment: "Optimize a sliced plate (.gcode.3mf)"; Tasks: startmenu
+Name: "{userprograms}\Print Optimizer\Add Bambu Studio presets"; Filename: "{app}\{#AppExe}"; Parameters: "--install-presets"; Comment: "Create or update the AI process presets in Bambu Studio"; Tasks: startmenu
 Name: "{userprograms}\Print Optimizer\Print Optimizer reports"; Filename: "{app}\{#AppExe}"; Parameters: "--open-reports"; Comment: "Open the reports folder"; Tasks: startmenu
 Name: "{userprograms}\Print Optimizer\Uninstall Print Optimizer"; Filename: "{uninstallexe}"; Tasks: startmenu
 
 [Run]
-Filename: "{app}\{#AppExe}"; Parameters: "--install-presets"; StatusMsg: "Adding Bambu Studio presets..."; Flags: runhidden waituntilterminated; Tasks: presets
+Filename: "{app}\{#AppExe}"; Parameters: "--install-presets --quiet"; StatusMsg: "Adding Bambu Studio presets..."; Flags: runhidden waituntilterminated; Tasks: presets
 Filename: "{app}\{#AppExe}"; Parameters: "--open-reports"; Description: "Open the reports folder"; Flags: postinstall nowait skipifsilent unchecked
 
 [UninstallRun]
@@ -70,9 +71,10 @@ Filename: "{app}\{#AppExe}"; Parameters: "--remove-presets"; Flags: runhidden wa
 [UninstallDelete]
 Type: files; Name: "{app}\presets_manifest.json"
 Type: files; Name: "{app}\presets.log"
+Type: files; Name: "{app}\presets_status.txt"
 
 [Messages]
-FinishedLabel=Setup has installed [name] on your computer.%n%nRestart Bambu Studio, then pick an "AI" process preset, for example "0.20mm H2S AI Balanced" (also AI Speed / AI Quality, at 0.16 / 0.20 / 0.24 mm). Every slice with it is optimized automatically and a results card appears.%n%nOlder "... - Optimized" presets were replaced; if one is synced to your Bambu account it was switched off - delete it in Bambu Studio.%n%nReports are saved in Documents\BambuPrintOptimizer\reports.
+FinishedLabel=Setup has installed [name] on your computer.%n%nRestart Bambu Studio, then pick an "AI" process preset, for example "0.20mm H2S AI Balanced" (also AI Speed / AI Quality). Every slice with it is optimized automatically and a results card appears.%n%nReports are saved in Documents\BambuPrintOptimizer\reports.
 
 [Code]
 function BambuRunning(): Boolean;
@@ -89,6 +91,24 @@ begin
       for I := 0 to GetArrayLength(Lines) - 1 do
         if Pos('bambu-studio.exe', Lowercase(Lines[I])) > 0 then
           Result := True;
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  Status: AnsiString;
+  Msg: String;
+begin
+  if (CurPageID = wpFinished) and WizardIsTaskSelected('presets') then
+  begin
+    if LoadStringFromFile(ExpandConstant('{app}\presets_status.txt'), Status) then
+      Msg := Trim(String(Status))
+    else
+      Msg := 'The Bambu Studio presets step did not report back (see presets.log in the install folder).';
+    WizardForm.FinishedLabel.Caption := 'Setup has installed Bambu Print Optimizer on your computer.' + #13#10#13#10 + Msg + #13#10#13#10 +
+      'Reports are saved in Documents\BambuPrintOptimizer\reports.';
+    WizardForm.FinishedLabel.AutoSize := False;
+    WizardForm.FinishedLabel.Height := ScaleY(170);
+  end;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;

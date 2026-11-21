@@ -47,14 +47,15 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
      - The presets are written into **every** Bambu Studio user folder: `%APPDATA%\BambuStudio\user\<account id>\process\` for each signed-in account, `user\default\` (signed out), and the active folder named in `BambuStudio.conf` (`preset_folder`). Bambu Studio only loads the folder of the account you are signed in with.
      - Presets this tool already created are updated in place. Your own tweaks and the Bambu cloud id are kept, and the preset is marked for upload. A preset of yours that happens to have the same name is never changed.
      - **Upgrading from 1.0/1.1:** the old `... - Optimized` presets (marked ones, or older manual ones whose post-processing line points at `bambu_optimizer.py` / `PrintOptimizer`) are backed up to `%LOCALAPPDATA%\Programs\PrintOptimizer\preset_backups\`, then retired.
-       - If the old preset isn't synced to the cloud, it is deleted.
-       - If it is synced to your Bambu account, its post-processing line is cleared and a note is added. Bambu Studio can delete a cloud preset only through its own Delete command; a cloud preset deleted on disk is downloaded again at the next sync. **Delete it in Bambu Studio** (select it → Delete).
-   - Start menu: **Print Optimizer** (pick a sliced `.gcode.3mf` and optimize it by hand) and **Print Optimizer reports** (opens the reports folder).
+       - If preset sync is off, which is Bambu Studio's default, or the old preset isn't synced, it is deleted.
+       - If it is synced to your Bambu account (Bambu Studio's *Sync user presets* setting is on, `app.sync_user_preset` in `BambuStudio.conf`), its post-processing line is cleared and a note is added. Bambu Studio can delete a cloud preset only through its own Delete command; a cloud preset deleted on disk is downloaded again at the next sync. **Delete it in Bambu Studio** (select it → Delete).
+   - Start menu: **Print Optimizer** (pick a sliced `.gcode.3mf` and optimize it by hand), **Add Bambu Studio presets** (run it again after adding a printer in Bambu Studio), and **Print Optimizer reports** (opens the reports folder).
+   - The finish page says what happened: how many presets were added, or that no Bambu Lab printer was found. Printers are detected from `BambuStudio.conf` (`presets.machine`, `models`) and from your user printer presets.
 3. Start Bambu Studio, pick an AI preset such as `0.20mm H2S AI Balanced`, and slice as usual.
 
 **Uninstall:** Windows Settings → Apps → *Bambu Print Optimizer* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
 - The `... AI <Goal>` presets (and any old `... - Optimized` ones) that belong to this tool are deleted.
-- Presets that are synced to your Bambu cloud account are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
+- Presets that are synced to your Bambu cloud account (only when preset sync is on) are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
 - Your reports in `Documents\BambuPrintOptimizer` and the preset backups are kept.
 
 **Silent install** (for scripting): `PrintOptimizer-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Add `/TASKS="startmenu"` to skip the presets.

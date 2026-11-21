@@ -28,7 +28,7 @@ def main():
               '0.12mm High Quality @BBL H2S', '0.20mm Strength @BBL H2S'):
         sysproc(d, n, [H2S])
     sysproc(d, 'fdm_process_common', [H2S], inst='false')
-    w(os.path.join(d, 'BambuStudio.conf'), {'app': {'preset_folder': '2132877600'}, 'models': [{'model': 'Bambu Lab H2S', 'nozzle_diameter': '0.4', 'vendor': 'BBL'}]})
+    w(os.path.join(d, 'BambuStudio.conf'), {'app': {'preset_folder': '2132877600', 'sync_user_preset': True}, 'models': [{'model': 'Bambu Lab H2S', 'nozzle_diameter': '0.4', 'vendor': 'BBL'}]})
 
     expected = ['%s H2S AI %s' % (l, g) for l in ('0.16mm', '0.20mm', '0.24mm') for g in ('Balanced', 'Speed', 'Quality')]
     names = [x[0] for x in bp.plan(d, os.path.join(d, 'system'))]
@@ -74,5 +74,51 @@ def main():
     print('test_presets: OK (%d presets for H2S 0.4: %s)' % (len(expected), ', '.join(expected)))
 
 
+def real_conf_case():
+    """Andrew's real layout: conf with '# MD5 checksum' trailer, printer only in presets.machine, no "models",
+    app.sync_user_preset false, empty user/*/machine folders, a marked 1.1.x preset in the account folder that
+    had a cloud id. Expect: 9 presets in each folder, the old preset DELETED (sync off), no access code in logs."""
+    d = tempfile.mkdtemp(); app = tempfile.mkdtemp(); logs = []
+    w(os.path.join(d, 'system', 'BBL.json'), {'version': '02.09.00.74'})
+    w(os.path.join(d, 'system', 'BBL', 'machine', H2S + '.json'), {'printer_model': 'Bambu Lab H2S', 'default_print_profile': '0.20mm Standard @BBL H2S'})
+    for n in ('0.16mm Standard @BBL H2S', '0.20mm Standard @BBL H2S', '0.24mm Standard @BBL H2S', '0.12mm High Quality @BBL H2S'):
+        sysproc(d, n, [H2S])
+    conf = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'fixtures', 'BambuStudio.conf'), encoding='utf-8').read()
+    w(os.path.join(d, 'BambuStudio.conf'), conf)
+    try:
+        json.loads(conf); raise AssertionError('fixture should not be plain JSON')
+    except ValueError:
+        pass
+    for uid in ('default', '2132877600'):
+        os.makedirs(os.path.join(d, 'user', uid, 'machine'), exist_ok=True)      # exist, but empty
+    acct = os.path.join(d, 'user', '2132877600', 'process')
+    w(os.path.join(acct, OLD + '.json'), {'name': OLD, 'description': bp.MARK, 'post_process': ['"C:\\X\\PrintOptimizer.exe" --goal balanced']})
+    w(os.path.join(acct, OLD + '.info'), 'sync_info = \nuser_id = 2132877600\nsetting_id = PPUS1\nbase_id = GP158\nupdated_time = 1\n')
+
+    c = bp.load_conf(d)
+    assert c['presets']['machine'] == H2S and c['app']['preset_folder'] == '2132877600' and not bp.sync_enabled(c)
+    assert bp.installed_printers(d, os.path.join(d, 'system')) == [H2S]
+    st = {}
+    written = bp.install('"C:\\X\\PrintOptimizer.exe" --goal {goal}', d, os.path.join(app, 'm.json'), log=logs.append,
+                         backup_dir=os.path.join(app, 'bk'), stats=st)
+    assert st['status'] == 'ok' and len(written) == 18, (st.get('status'), len(written))
+    assert not os.path.exists(os.path.join(acct, OLD + '.json')) and not os.path.exists(os.path.join(acct, OLD + '.info'))
+    assert st['removed'] and not st['cleared']
+    text = bp.status_text(st)
+    assert 'Added 9 AI presets for H2S 0.4 nozzle' in text and 'delete them in Bambu Studio' not in text, text
+    assert not any('SECRET' in m for m in logs) and 'SECRET' not in text
+    # uninstall with sync off: everything of ours deleted, even with a cloud id
+    bp._write_info(os.path.join(acct, '0.20mm H2S AI Balanced.info'), {'setting_id': 'PPUS9', 'updated_time': '1'})
+    bp.remove(d, os.path.join(app, 'm.json'), log=logs.append)
+    assert not [f for f in os.listdir(acct) if f.endswith('.json')], os.listdir(acct)
+    # nothing detectable -> clear "noprinter" status, no files
+    w(os.path.join(d, 'BambuStudio.conf'), '{"app": {"preset_folder": ""}}\n# MD5 checksum 00\n')
+    st2 = {}
+    assert bp.install('x {goal}', d, None, log=logs.append, stats=st2) == [] and st2['status'] == 'noprinter'
+    assert 'No Bambu Lab printer was found' in bp.status_text(st2)
+    print('test_presets real-conf case: OK')
+
+
 if __name__ == '__main__':
     main()
+    real_conf_case()

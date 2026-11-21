@@ -20,7 +20,7 @@ from emitter import emit, validate, rewrite_m73  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.2.0'
+VERSION = '1.2.1'
 
 
 def windows_documents_dir():
@@ -219,7 +219,9 @@ def pick_file():
 def presets_cmd(a):
     import bambu_presets as bp
     manifest = os.path.join(app_dir(), 'presets_manifest.json')
-    msgs = []
+    msgs = ['--- %s %s %s' % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), VERSION,
+                                '--remove-presets' if a.remove_presets else '--install-presets')]
+    stats = {}
     def log(m):
         msgs.append(m); eprint(m)
     try:
@@ -233,11 +235,28 @@ def presets_cmd(a):
                 exe = sys.executable
                 w = os.path.join(os.path.dirname(exe), 'pythonw.exe')
                 line = bp.post_process_line(w if os.path.exists(w) else exe, os.path.abspath(__file__), ('--goal {goal} ' + a.pp_args).strip())
-            bp.install(line, a.bambu_dir, manifest, log, backup_dir=os.path.join(app_dir(), 'preset_backups'))
+            bp.install(line, a.bambu_dir, manifest, log, backup_dir=os.path.join(app_dir(), 'preset_backups'), stats=stats)
             if bp.bambu_running():
                 log('Bambu Studio is running - restart it to see the new presets.')
     except Exception as ex:
         log('preset step failed: %s' % ex)
+        stats['status'] = 'error'
+    if not a.remove_presets:
+        text = bp.status_text(stats)
+        try:   # read by the installer's finish page
+            with open(os.path.join(app_dir(), 'presets_status.txt'), 'w', encoding='utf-8') as f:
+                f.write(text + '\n')
+        except OSError:
+            pass
+        if not a.quiet and gui_available():   # Start menu "Add Bambu Studio presets"
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+                r = tk.Tk(); r.withdraw()
+                (messagebox.showinfo if stats.get('status') == 'ok' else messagebox.showwarning)('Print Optimizer', text)
+                r.destroy()
+            except Exception:
+                pass
     try:
         with open(os.path.join(app_dir(), 'presets.log'), 'a', encoding='utf-8') as f:
             f.write('\n'.join(msgs) + '\n')
@@ -334,6 +353,7 @@ def main(argv=None):
     ap.add_argument('--remove-presets', action='store_true', help='remove the presets created by --install-presets')
     ap.add_argument('--pp-args', default='', help='extra arguments added to the presets\' post-processing line (each preset already has its own --goal)')
     ap.add_argument('--bambu-dir', help=argparse.SUPPRESS)
+    ap.add_argument('--quiet', action='store_true', help=argparse.SUPPRESS)
     ap.add_argument('--open-reports', action='store_true', help='open the reports folder')
     ap.add_argument('--self-test', action='store_true', help=argparse.SUPPRESS)
     a = ap.parse_args(argv)
