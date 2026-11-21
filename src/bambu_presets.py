@@ -72,10 +72,79 @@ def installed_printers(data_dir, sysdir):
     return out
 
 
+def active_preset_folder(data_dir):
+    """Folder Bambu Studio loads user presets from: BambuStudio.conf app.preset_folder (the account id when
+    signed in, see PresetBundle::load_user_presets). Empty -> "default"."""
+    conf = _load(os.path.join(data_dir, 'BambuStudio.conf')) or {}
+    app = conf.get('app') if isinstance(conf.get('app'), dict) else {}
+    for v in (app.get('preset_folder'), conf.get('preset_folder')):
+        if isinstance(v, str) and v.strip():
+            return v.strip()
+    return None
+
+
 def user_dirs(data_dir):
+    """Every existing user/<id> folder (signed-in accounts and "default") + "default" + the active account folder."""
     base = os.path.join(data_dir, 'user')
-    ds = [d for d in glob.glob(os.path.join(base, '*')) if os.path.isdir(d)]
-    return ds or [os.path.join(base, 'default')]
+    names = [os.path.basename(d) for d in glob.glob(os.path.join(base, '*')) if os.path.isdir(d)]
+    for extra in ('default', active_preset_folder(data_dir)):
+        if extra and extra not in names:
+            names.append(extra)
+    return [os.path.join(base, n) for n in sorted(names)]
+
+
+def _references_us(preset):
+    pp = preset.get('post_process') if isinstance(preset, dict) else None
+    txt = ' '.join(pp) if isinstance(pp, list) else str(pp or '')
+    return bool(re.search(r'bambu_optimizer\.py|printoptimizer', txt, re.I))
+
+
+def _is_ours(preset):
+    return isinstance(preset, dict) and (MARK in str(preset.get('description', '')) or _references_us(preset))
+
+
+def _read_info(path):
+    info = {}
+    try:
+        with open(path, encoding='utf-8') as f:
+            for line in f:
+                if '=' in line:
+                    k, v = line.split('=', 1)
+                    info[k.strip()] = v.strip()
+    except OSError:
+        pass
+    return info
+
+
+def _write_info(path, info):
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
+        for k in ('sync_info', 'user_id', 'setting_id', 'base_id', 'updated_time'):
+            f.write('%s = %s\n' % (k, info.get(k, '')))
+
+
+def _touch_info(info):
+    """Local change to a preset: newer updated_time; if it is synced to the Bambu cloud (has a setting_id) mark it
+    "update" so Bambu Studio uploads the change instead of restoring the old cloud copy."""
+    info['updated_time'] = str(int(time.time()))
+    if info.get('setting_id') and info.get('sync_info', '') in ('', 'save'):
+        info['sync_info'] = 'update'
+    return info
+
+
+def _backup(path, backup_dir, uid):
+    if not backup_dir:
+        return None
+    d = os.path.join(backup_dir, uid); os.makedirs(d, exist_ok=True)
+    stamp = time.strftime('%Y%m%d-%H%M%S')
+    out = None
+    for src in (path, path[:-5] + '.info'):
+        if os.path.exists(src):
+            base = os.path.basename(src)
+            dst = os.path.join(d, '%s.%s%s' % (base.rsplit('.', 1)[0], stamp, os.path.splitext(base)[1]))
+            with open(src, 'rb') as fi, open(dst, 'wb') as fo:
+                fo.write(fi.read())
+            out = out or dst
+    return out
 
 
 def post_process_line(exe, script=None, args='--goal balanced'):
@@ -97,7 +166,7 @@ def bambu_running():
         return False
 
 
-def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=()):
+def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=(), backup_dir=None):
     data_dir = data_dir or bambu_data_dir()
     sysdir = system_profiles_dir(data_dir, sysdir_extra)
     if not sysdir:
@@ -122,26 +191,41 @@ def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=()):
             pj = _load(os.path.join(sysdir, 'BBL', 'process', parent + '.json')) or {}
             name = parent + SUFFIX
             path = os.path.join(pdir, name + '.json')
-            old = _load(path)
-            if old is not None and MARK not in str(old.get('description', '')):
+            ipath = os.path.join(pdir, name + '.info')
+            exists = os.path.exists(path)
+            old = _load(path) if exists else None
+            if exists and not _is_ours(old):
                 log('skip %s: a preset with that name already exists and was not created by this tool' % path)
                 continue
-            preset = {
-                'type': 'process',
-                'from': 'User',
-                'inherits': parent,
-                'is_custom_defined': '0',
-                'name': name,
-                'print_settings_id': name,
-                'description': MARK + '. Runs the optimizer after slicing.',
-                'post_process': [cmdline],
-                'version': version,
-            }
+            info = _read_info(ipath) if exists else {}
+            if exists:
+                legacy = MARK not in str(old.get('description', ''))
+                if legacy:   # e.g. the old manual setup: python.exe ...\bambu_optimizer.py, no marker
+                    b = _backup(path, backup_dir, uid)
+                    log('upgrading legacy preset %s (backup: %s)' % (path, b))
+                preset = dict(old)   # keep the user's own tweaks; only fix post-processing + marker
+                preset['post_process'] = [cmdline]
+                preset['description'] = MARK + '. Runs the optimizer after slicing.'
+                preset.setdefault('inherits', parent)
+                preset.setdefault('version', version)
+                preset['name'] = name
+            else:
+                preset = {
+                    'type': 'process',
+                    'from': 'User',
+                    'inherits': parent,
+                    'is_custom_defined': '0',
+                    'name': name,
+                    'print_settings_id': name,
+                    'description': MARK + '. Runs the optimizer after slicing.',
+                    'post_process': [cmdline],
+                    'version': version,
+                }
+                info = {'sync_info': '', 'user_id': '' if uid == 'default' else uid, 'setting_id': '',
+                        'base_id': pj.get('setting_id', '')}
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(preset, f, indent=4)
-            with open(os.path.join(pdir, name + '.info'), 'w', encoding='utf-8', newline='\n') as f:
-                f.write('sync_info = \nuser_id = %s\nsetting_id = \nbase_id = %s\nupdated_time = %d\n' % (
-                    '' if uid == 'default' else uid, pj.get('setting_id', ''), int(time.time())))
+            _write_info(ipath, _touch_info(info))
             written.append(path)
             log('wrote preset: %s' % path)
     if manifest:
@@ -152,19 +236,36 @@ def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=()):
 
 
 def remove(data_dir=None, manifest=None, log=print):
+    """Undo install() in every user/<id> folder. Only "* - Optimized" presets that are ours (marker or a
+    post-processing line pointing at this tool) are touched.
+    * not synced to the Bambu cloud: files deleted
+    * synced (has setting_id): deleting locally would make Bambu Studio re-download the cloud copy, which would
+      still call the removed exe and make slicing fail - so the post-processing line is cleared instead
+      (marked for upload). Delete it in Bambu Studio if you no longer want it."""
     data_dir = data_dir or bambu_data_dir()
     cands = set((_load(manifest) or {}).get('presets', [])) if manifest else set()
-    cands |= set(glob.glob(os.path.join(data_dir, 'user', '*', 'process', '*' + SUFFIX + '.json')))
+    for ud in user_dirs(data_dir):
+        cands |= set(glob.glob(os.path.join(ud, 'process', '*' + SUFFIX + '.json')))
     removed = []
     for p in sorted(cands):
         j = _load(p)
-        if j is None or MARK not in str(j.get('description', '')):
-            continue     # never delete a preset we did not create (or one the user re-saved without our marker)
-        for q in (p, p[:-5] + '.info'):
-            try:
-                os.remove(q)
-            except OSError:
-                pass
+        if j is None or not os.path.basename(p).endswith(SUFFIX + '.json') or not _is_ours(j):
+            continue     # never touch unrelated presets
+        ipath = p[:-5] + '.info'
+        info = _read_info(ipath)
+        if info.get('setting_id'):
+            j['post_process'] = []
+            j['description'] = 'Bambu Print Optimizer was uninstalled; this preset no longer post-processes. Safe to delete.'
+            with open(p, 'w', encoding='utf-8') as f:
+                json.dump(j, f, indent=4)
+            _write_info(ipath, _touch_info(info))
+            log('neutralized cloud-synced preset (post-processing cleared): %s' % p)
+        else:
+            for q in (p, ipath):
+                try:
+                    os.remove(q)
+                except OSError:
+                    pass
+            log('removed preset: %s' % p)
         removed.append(p)
-        log('removed preset: %s' % p)
     return removed

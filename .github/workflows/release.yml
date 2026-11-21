@@ -58,6 +58,7 @@ jobs:
         run: |
           python -m py_compile (Get-ChildItem src\*.py).FullName
           python src\bambu_optimizer.py --self-test
+          python test\test_presets.py
 
       - name: Build app (PyInstaller, windowed one-folder)
         run: python -m PyInstaller packaging\PrintOptimizer.spec --noconfirm --clean --distpath dist --workpath build\pyi

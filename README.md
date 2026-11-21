@@ -39,11 +39,17 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 2. Close Bambu Studio, then run the installer. There are two clicks: **Next** on the options page, then **Finish**.
    - It installs for your Windows user only, with no admin rights, to `%LOCALAPPDATA%\Programs\PrintOptimizer`.
    - Python, shapely and numpy are bundled. You don't need to install anything else.
-   - Option *Add "- Optimized" process presets to Bambu Studio* (on by default). For every Bambu Lab printer you added in Bambu Studio, it creates a copy of that printer's default process preset with the optimizer set as its post-processing script, for example `0.20mm Standard @BBL H2S - Optimized`. The preset **inherits** the system preset, so you still get Bambu's preset updates. It is written to `%APPDATA%\BambuStudio\user\<your id>\process\`. Your own presets are never changed or overwritten.
+   - Option *Add "- Optimized" process presets to Bambu Studio* (on by default). For every Bambu Lab printer you added in Bambu Studio, it creates a copy of that printer's default process preset with the optimizer set as its post-processing script, for example `0.20mm Standard @BBL H2S - Optimized`. The preset **inherits** the system preset, so you still get Bambu's preset updates. It is written into **every** Bambu Studio user folder: `%APPDATA%\BambuStudio\user\<account id>\process\` for each signed-in account, `user\default\` (signed out), and the active folder named in `BambuStudio.conf` (`preset_folder`). Bambu Studio only loads the folder of the account you are signed in with.
+     - A same-named preset from an older manual setup is upgraded in place. That means one whose post-processing line already points at `bambu_optimizer.py` or `PrintOptimizer`. The installer keeps its settings, switches it to the installed exe, and saves a backup in `%LOCALAPPDATA%\Programs\PrintOptimizer\preset_backups\`.
+     - Cloud-synced presets keep their Bambu cloud id and are marked for upload, so the change syncs.
+     - Any other preset, including an unrelated one with the same name, is never changed.
    - Start menu: **Print Optimizer** (pick a sliced `.gcode.3mf` and optimize it by hand) and **Print Optimizer reports** (opens the reports folder).
 3. Start Bambu Studio, pick the `... - Optimized` process preset, and slice as usual.
 
-**Uninstall:** Windows Settings → Apps → *Bambu Print Optimizer* → Uninstall (or the Start menu entry). This removes the program, the shortcuts, and the presets the installer created. A preset is only removed if it still carries the installer's marker. Your reports in `Documents\BambuPrintOptimizer` are kept.
+**Uninstall:** Windows Settings → Apps → *Bambu Print Optimizer* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
+- `- Optimized` presets that belong to this tool are deleted.
+- Presets that are synced to your Bambu cloud account are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
+- Your reports in `Documents\BambuPrintOptimizer` and the preset backups are kept.
 
 **Silent install** (for scripting): `PrintOptimizer-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Add `/TASKS="startmenu"` to skip the presets.
 

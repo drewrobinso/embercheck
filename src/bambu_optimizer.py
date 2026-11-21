@@ -20,7 +20,7 @@ from emitter import emit, validate, rewrite_m73  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.1.0'
+VERSION = '1.1.1'
 
 
 def windows_documents_dir():
@@ -233,7 +233,7 @@ def presets_cmd(a):
                 exe = sys.executable
                 w = os.path.join(os.path.dirname(exe), 'pythonw.exe')
                 line = bp.post_process_line(w if os.path.exists(w) else exe, os.path.abspath(__file__), a.pp_args)
-            bp.install(line, a.bambu_dir, manifest, log)
+            bp.install(line, a.bambu_dir, manifest, log, backup_dir=os.path.join(app_dir(), 'preset_backups'))
             if bp.bambu_running():
                 log('Bambu Studio is running - restart it to see the new presets.')
     except Exception as ex:
