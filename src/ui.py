@@ -58,7 +58,11 @@ def logo(parent, size, bg=None):
 
 
 def _font_family():
-    return 'Segoe UI' if sys.platform == 'win32' else 'DejaVu Sans'
+    if sys.platform == 'win32':
+        return 'Segoe UI'
+    if sys.platform == 'darwin':
+        return 'Helvetica Neue'
+    return 'DejaVu Sans'
 
 
 def _win_tweaks(root):

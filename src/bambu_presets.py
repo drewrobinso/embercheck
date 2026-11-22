@@ -1,7 +1,7 @@
 """Create / remove "<layer>mm <printer> EmberCheck <Goal>" process presets in Bambu Studio
 (e.g. "0.20mm X1C EmberCheck Balanced"), one per selected printer x nozzle x main system layer-height preset x goal.
 
-Used by the Windows installer (EmberCheck.exe --install-presets / --remove-presets) and usable by hand.
+Used by the Windows installer (EmberCheck.exe --install-presets / --remove-presets) and by hand on Windows, macOS and Linux.
 Format follows Bambu Studio's PresetCollection::load_presets (src/libslic3r/Preset.cpp):
   * <data_dir>/user/<user_id or "default">/process/<preset name>.json  (file name == preset name)
   * a parseable "version" is required, "inherits" must name an existing (system) preset
@@ -76,14 +76,23 @@ def sync_enabled(conf):
     return v is True or str(v).strip().lower() in ('true', '1')
 
 
-def system_profiles_dir(data_dir, extra=()):
-    """Bambu copies the vendor bundle to <data_dir>/system; fall back to the program's resources/profiles."""
+def system_profile_candidates(data_dir, extra=()):
+    """Possible locations of Bambu Studio's vendor profiles (BBL.json + BBL/machine)."""
     cands = [os.path.join(data_dir, 'system')] + list(extra)
     if sys.platform == 'win32':
         for pf in (os.environ.get('ProgramFiles', r'C:\Program Files'), os.environ.get('ProgramW6432', '')):
             if pf:
                 cands.append(os.path.join(pf, 'Bambu Studio', 'resources', 'profiles'))
-    for c in cands:
+    elif sys.platform == 'darwin':
+        for app in ('BambuStudio.app', 'Bambu Studio.app'):
+            for root in ('/Applications', os.path.expanduser('~/Applications')):
+                cands.append(os.path.join(root, app, 'Contents', 'Resources', 'profiles'))
+    return cands
+
+
+def system_profiles_dir(data_dir, extra=()):
+    """Bambu copies the vendor bundle to <data_dir>/system; fall back to the program's resources/profiles."""
+    for c in system_profile_candidates(data_dir, extra):
         if os.path.isfile(os.path.join(c, 'BBL.json')) and os.path.isdir(os.path.join(c, 'BBL', 'machine')):
             return c
     return None
@@ -207,15 +216,17 @@ def post_process_line(exe, script=None, args='--goal balanced'):
 
 
 def bambu_running():
-    if sys.platform != 'win32':
-        return False
     try:
         import subprocess
-        out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq bambu-studio.exe', '/NH'], capture_output=True, text=True,
-                             creationflags=0x08000000).stdout
-        return 'bambu-studio.exe' in out.lower()
+        if sys.platform == 'win32':
+            out = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq bambu-studio.exe', '/NH'], capture_output=True, text=True,
+                                 creationflags=0x08000000).stdout
+            return 'bambu-studio.exe' in out.lower()
+        if sys.platform == 'darwin':
+            return subprocess.run(['pgrep', '-x', 'BambuStudio'], capture_output=True).returncode == 0
     except Exception:
         return False
+    return False
 
 
 def available_models(sysdir):

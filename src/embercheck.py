@@ -4,7 +4,9 @@ for Bambu Studio G-code.
 
 Bambu Studio post-processing usage (Process > Others > Post-processing scripts):
     "C:\\Path\\To\\python.exe" "C:\\Path\\To\\embercheck.py" --goal balanced
+    /usr/bin/python3 "/Users/<you>/EmberCheck/embercheck.py" --goal balanced;
 Bambu Studio appends the temporary G-code path as the last argument; the file is edited in place.
+See docs/macos.md for the macOS Python zip (preview, untested).
 
 Standalone:
     python embercheck.py model.gcode -o model.opt.gcode
@@ -100,10 +102,15 @@ def default_report_dir():
 
 def local_data_dir():
     """%LOCALAPPDATA%\\EmberCheck on Windows (receipt log),
+    ~/Library/Application Support/EmberCheck on macOS,
     ~/.local/share/embercheck elsewhere."""
     if sys.platform == 'win32':
         base = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
         return _adopt_dir(os.path.join(base, 'EmberCheck'), [])
+    if sys.platform == 'darwin':
+        base = os.path.expanduser('~/Library/Application Support')
+        return _adopt_dir(os.path.join(base, 'EmberCheck'),
+                          [os.path.expanduser('~/.local/share/embercheck')])
     base = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
     return _adopt_dir(os.path.join(base, 'embercheck'), [])
 
@@ -348,7 +355,8 @@ def log_run(src, card, runs_log=None):
 
 
 def gui_available():
-    if sys.platform != 'win32' and not os.environ.get('DISPLAY'):
+    # Windows and macOS have a session GUI (Aqua, no DISPLAY). Linux needs DISPLAY or Wayland.
+    if sys.platform not in ('win32', 'darwin') and not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')):
         return False
     try:
         import tkinter  # noqa: F401
@@ -381,8 +389,14 @@ def _open_path(p):
     try:
         if sys.platform == 'win32':
             os.startfile(p)  # noqa
+        elif sys.platform == 'darwin':
+            subprocess.run(['open', p], check=False)
         else:
-            webbrowser.open('file://' + os.path.abspath(p))
+            opener = 'xdg-open' if shutil.which('xdg-open') else None
+            if opener:
+                subprocess.run([opener, p], check=False)
+            else:
+                webbrowser.open('file://' + os.path.abspath(p))
     except Exception:
         pass
 
@@ -728,13 +742,7 @@ def main(argv=None):
         except Exception as ex:
             log('could not show results card: %s' % ex)
     if a.open and card and card.get('report'):
-        try:
-            if sys.platform == 'win32':
-                os.startfile(card['report'])  # noqa
-            else:
-                webbrowser.open('file://' + os.path.abspath(card['report']))
-        except Exception:
-            pass
+        _open_path(card['report'])
     return 1 if (err is not None and a.strict) else 0
 
 

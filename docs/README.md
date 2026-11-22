@@ -14,3 +14,4 @@ Each page explains what the optimization changes, when it applies, what it never
 | [stringing.md](stringing.md) | Open-air travel analysis and optional added retractions | analysis yes, fix `--fix-strings` |
 | [verify.md](verify.md) | The EmberCheck stamp, `--check-stamp`, runs.log, and what Bambu Studio prints/previews (with source references) | always |
 | [safety-validation.md](safety-validation.md) | Built-in validator, `verify.py`, the goal matrix and UI tests | always |
+| [macos.md](macos.md) | Running the Python zip on macOS (preview, untested) | — |

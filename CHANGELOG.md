@@ -2,6 +2,13 @@
 
 All notable changes. Versions follow `VERSION` in `src/embercheck.py` (`src/bambu_optimizer.py` up to 1.4.0). EmberCheck was called **Bambu Print Optimizer** up to 1.4.0. Test numbers are from the build box (Bambu Studio 02.09.01.70 CLI slices for the H2S 0.4, six reference prints: four 225-layer towers in PLA/PETG/ABS/ASA and the 166-layer speaker adapter in PETG/ASA). Times are the optimizer's own motion model, not measured prints. Windows builds were tested under Wine 10; 1.4.2 was also installed and run on the maintainer's Windows PC.
 
+## [Unreleased] — macOS preview
+
+### Added
+- macOS path support: Bambu Studio's config dir (`~/Library/Application Support/BambuStudio`) and system profiles in the app bundle (`/Applications/BambuStudio.app/Contents/Resources/profiles`), plus EmberCheck's own data dir (`~/Library/Application Support/EmberCheck`). The results card and other windows no longer require a `DISPLAY` variable on macOS (Aqua).
+- [docs/macos.md](docs/macos.md): how to run the Python zip on macOS (Python 3, the Bambu Studio post-processing script line, Gatekeeper/quarantine, `--install-presets` / `scripts/install_macos.sh`). macOS is an untested preview; there is no Mac installer yet.
+- GitHub Actions tests on `macos-latest` (and Ubuntu/Windows): compile, `--self-test` and `test/test_presets.py` only. No packaging or release.
+
 ## [1.4.2] - 2026-11-21 — renamed to EmberCheck
 
 ### Renamed: Bambu Print Optimizer → **EmberCheck — Print Optimizer for Bambu Studio**

@@ -1,5 +1,5 @@
 """dist/EmberCheck-<ver>-python.zip: flat zip of the Python sources (files at the zip root),
-for people who prefer their own Python install (unzip to C:\\EmberCheck)."""
+for people who prefer their own Python install (unzip to C:\\EmberCheck or, on a Mac, ~/EmberCheck)."""
 import os, re, zipfile
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 ver = re.search(r"^VERSION = '([^']+)'", open(os.path.join(ROOT, 'src', 'embercheck.py'), encoding='utf-8').read(), re.M).group(1)
@@ -11,6 +11,11 @@ with zipfile.ZipFile(out, 'w', zipfile.ZIP_DEFLATED) as z:
         z.write(os.path.join(ROOT, 'src', f), f)
     for f in ('README.md', 'LICENSE', 'PRIVACY.md', 'CODE_SIGNING.md', 'requirements.txt'):
         z.write(os.path.join(ROOT, f), f)
+    for src, dst in (('docs/macos.md', 'docs/macos.md'),
+                     ('scripts/install_macos.sh', 'scripts/install_macos.sh')):
+        path = os.path.join(ROOT, src)
+        if os.path.isfile(path):
+            z.write(path, dst)
     z.write(os.path.join(ROOT, 'packaging', 'icon.ico'), 'icon.ico')
     adir = os.path.join(ROOT, 'src', 'assets')       # window icon + card logo (ui.py looks for assets/ next to the .py files)
     for f in sorted(os.listdir(adir)):

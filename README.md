@@ -4,7 +4,7 @@
 
 *Formerly "Bambu Print Optimizer" (1.x, up to 1.4.0). Installing EmberCheck upgrades it in place.*
 
-Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer. Windows installer, no Python needed.
+Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer. Windows installer, no Python needed. A Python zip is also available for macOS (preview, untested) and other systems; see [docs/macos.md](docs/macos.md).
 
 Repository: https://github.com/drewrobinso/embercheck
 
@@ -134,6 +134,8 @@ Use `EmberCheck-<version>-python.zip`. It is flat: the files sit at the zip root
    ```
    Or create the presets automatically: `py C:\EmberCheck\embercheck.py --install-presets --printers "X1C;P1S"` (or `--select` for the selection window; `--remove-presets` to undo).
 3. Standalone: `py C:\EmberCheck\embercheck.py "C:\path\plate.gcode.3mf"` writes `plate.optimized.gcode.3mf`, with the G-code and its MD5 updated. Plain `.gcode` works too (`-o out.gcode`, or in place).
+
+**macOS (preview, untested):** the same Python zip runs on a Mac with Python 3.11+. There is no Mac installer yet, and this has not been tested on a Mac. See [docs/macos.md](docs/macos.md) for the post-processing script line, Gatekeeper notes, and how to install the presets.
 
 ## The three goals
 
