@@ -15,15 +15,17 @@ def _with_platform(mod, name, fn):
 
 
 def _with_home(fn):
-    """Run fn() with HOME (and related env) pointed at a throwaway directory."""
+    """Run fn() with HOME / USERPROFILE (and related env) pointed at a throwaway directory.
+    Windows expanduser() prefers USERPROFILE over HOME, so both are set."""
     home = tempfile.mkdtemp()
-    keys = ('HOME', 'APPDATA', 'LOCALAPPDATA', 'XDG_DATA_HOME', 'ProgramFiles', 'ProgramW6432')
+    keys = ('HOME', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'XDG_DATA_HOME',
+            'ProgramFiles', 'ProgramW6432')
     old = {k: os.environ.get(k) for k in keys}
     try:
-        os.environ['HOME'] = home
         for k in keys:
-            if k != 'HOME':
-                os.environ.pop(k, None)
+            os.environ.pop(k, None)
+        os.environ['HOME'] = home
+        os.environ['USERPROFILE'] = home
         return fn(), home
     finally:
         for k, v in old.items():
