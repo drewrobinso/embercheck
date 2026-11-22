@@ -2,8 +2,6 @@
 
 # EmberCheck — Print Optimizer for Bambu Studio
 
-*Formerly "Bambu Print Optimizer" (1.x, up to 1.4.0). Installing EmberCheck upgrades it in place.*
-
 Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer. Windows installer, no Python needed. A Python zip is also available for macOS (preview, untested) and other systems; see [docs/macos.md](docs/macos.md).
 
 Repository: https://github.com/drewrobinso/embercheck
