@@ -33,7 +33,7 @@ The time saved is the modelled duration of the removed lines (plus the changed t
 ## Risks and why it is limited this way
 - Removing a hop can make the nozzle drag over curled or blobbed infill. That is why it is limited to short travels over printed **infill** of the same feature, never walls, tops, open air or the first layers.
 - Removing a retraction can cause oozing/stringing on long travels. On Speed it is limited to ≤ 10 mm over printed infill, where any string is hidden inside the part.
-- **Not yet confirmed by a real print.** If you see scars on top of infill or stringing inside the part, use `--no-hop-skip` or AI Balanced/Quality.
+- **Not yet confirmed by a real print.** If you see scars on top of infill or stringing inside the part, use `--no-hop-skip` or EmberCheck Balanced/Quality.
 
 ## Checks
 - Built-in validator: exact per-layer E, same extrusion moves, protected blocks unchanged.

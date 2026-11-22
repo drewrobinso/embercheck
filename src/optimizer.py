@@ -82,13 +82,19 @@ ACCEL_MIN_LAYER = 3
 HOP_FEATURES = {'Sparse infill', 'Internal solid infill'}
 HOP_MIN_LAYER = 3
 # printers whose firmware does its own curve planning: Bambu Studio switches its arc fitting off for these
-CURVE_PLANNING_MODELS = ('H2D', 'H2S', 'H2C', 'X2D', 'H2D Pro', 'A2L')
+CURVE_PLANNING_MODELS = ('H2D', 'H2S', 'H2C', 'X2D', 'H2D Pro', 'A2L', 'H3C', 'P2S')
 
 
-def arcs_enabled(st, printer_model):
+def arcs_enabled(st, printer_model, profile_arcs=None):
+    """auto: follow the printer profile's own arc-fitting setting from the G-code config (Bambu's system profiles turn
+    it off for every printer with firmware curve planning: H2D/H2D Pro/H2S/H2C/X2D/H3C/P2S/A2L in 02.09); if the
+    G-code has no such setting, fall back to the known curve-planning models."""
     if st.arcs == 'on': return True
     if st.arcs == 'off': return False
-    return not any(m in (printer_model or '') for m in CURVE_PLANNING_MODELS)
+    if any(m in (printer_model or '') for m in CURVE_PLANNING_MODELS): return False
+    if profile_arcs is not None:
+        return str(profile_arcs).strip().lower() in ('1', 'true')
+    return True
 
 
 class LayerEval:
@@ -826,7 +832,7 @@ class Optimizer:
         self.analyse_travel()
         self.plan_reorder()
         self.plan_hops()
-        self.arcs_on = arcs_enabled(self.st, self.g.config.get('printer_model', ''))
+        self.arcs_on = arcs_enabled(self.st, self.g.config.get('printer_model', ''), self.g.config.get('enable_arc_fitting'))
         # time the plan can count on from travel order and skipped hops (the final output is checked again anyway)
         self.credit_s = self.reorder_stats.get('time_saved', 0.0) + self.hop_stats.get('time_saved', 0.0)
         self.budget_stats = {'kept_hot_layers': 0, 'dropped_overhangs': 0, 'rounds': 0, 'over_s': 0.0}

@@ -1,6 +1,12 @@
-# Bambu Print Optimizer
+<p align="center"><img src="branding/png/embercheck_128.png" width="96" height="96" alt="EmberCheck icon"></p>
 
-Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code. Windows installer, no Python needed.
+# EmberCheck — Print Optimizer for Bambu Studio
+
+*Formerly "Bambu Print Optimizer" (1.x, up to 1.4.0). Installing EmberCheck upgrades it in place.*
+
+Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer. Windows installer, no Python needed.
+
+Repository: https://github.com/drewrobinso/embercheck
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/drewrobinso)
 
@@ -44,35 +50,39 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 
 ## Install (Windows 10/11)
 
-1. Download `PrintOptimizer-Setup-<version>.exe` from the [Releases](https://github.com/drewrobinso/bambu-print-optimizer/releases) page.
-2. Close Bambu Studio, then run the installer. There are two clicks: **Next** on the options page, then **Finish**.
-   - It installs for your Windows user only, with no admin rights, to `%LOCALAPPDATA%\Programs\PrintOptimizer`.
+> Privacy: EmberCheck collects and sends no data ([PRIVACY.md](PRIVACY.md)). Code signing: [CODE_SIGNING.md](CODE_SIGNING.md). SignPath Foundation signing is pending, so current releases are unsigned.
+
+1. Download `EmberCheck-Setup-<version>.exe` from the [Releases](https://github.com/drewrobinso/embercheck/releases) page.
+2. Close Bambu Studio, then run the installer: **Next** on the options page, pick your printers on the **printers page**, then **Finish**.
+   - It installs for your Windows user only, with no admin rights, to `%LOCALAPPDATA%\Programs\EmberCheck`.
    - Python, shapely and numpy are bundled. You don't need to install anything else.
-   - Option *Add AI process presets to Bambu Studio* (on by default). For every Bambu Lab printer you added in Bambu Studio, it creates presets named `<layer>mm <printer> AI <Goal>`. Each one **inherits** the matching system process preset (so you keep getting Bambu's updates) and runs the optimizer with that goal.
+   - Option *Add EmberCheck process presets to Bambu Studio* (on by default). After the files are copied, a **printer page** lists every Bambu Lab model in Bambu Studio's own system profiles (`BBL.json`, so new models appear without an EmberCheck update: X1 Carbon, X1, X1E, P1P, P1S, P2S, A1 mini, A1, A2L, H2D, H2D Pro, H2S, H2C, X2D, H3C in 02.09). The printers you set up in Bambu Studio (`BambuStudio.conf` and your user printer presets) are pre-checked.
+   - For every checked printer and **every nozzle** its system profiles offer, it creates presets named `<layer>mm <printer> EmberCheck <Goal>`. Each one **inherits** the matching system process preset of that exact printer and nozzle (so you keep getting Bambu's updates), has `compatible_printers` set to that printer/nozzle, and runs EmberCheck with that goal.
      - Layer heights: the main system layer heights only (Standard / Optimal / Fine / Draft, not High Quality, Strength and similar variants), at most 3 per printer and nozzle: the printer's default layer height and its nearest neighbours.
      - Goals: `Balanced`, `Speed` and `Quality` (`--goal balanced/speed/quality`).
-     - For an **H2S with a 0.4 nozzle** that is 9 presets: `0.16mm H2S AI Balanced`, `0.16mm H2S AI Speed`, `0.16mm H2S AI Quality`, `0.20mm H2S AI Balanced`, `0.20mm H2S AI Speed`, `0.20mm H2S AI Quality`, `0.24mm H2S AI Balanced`, `0.24mm H2S AI Speed`, `0.24mm H2S AI Quality` (based on `0.16/0.20/0.24mm Standard @BBL H2S`).
-     - Nozzles other than 0.4 mm get the size in the name, for example `0.30mm H2S 0.6 AI Balanced`. The X1 Carbon is shortened to `X1C`.
+     - For an **H2S with a 0.4 nozzle** that is 9 presets: `0.16mm H2S EmberCheck Balanced`, `0.16mm H2S EmberCheck Speed`, `0.16mm H2S EmberCheck Quality`, `0.20mm H2S EmberCheck Balanced`, `0.20mm H2S EmberCheck Speed`, `0.20mm H2S EmberCheck Quality`, `0.24mm H2S EmberCheck Balanced`, `0.24mm H2S EmberCheck Speed`, `0.24mm H2S EmberCheck Quality` (based on `0.16/0.20/0.24mm Standard @BBL H2S`).
+     - Other printers: `0.20mm X1C EmberCheck Balanced`, `0.20mm P1S EmberCheck Balanced`, `0.20mm A1 mini EmberCheck Balanced`, ... Nozzles other than 0.4 mm get the size in the name, for example `0.30mm X1C 0.6 EmberCheck Speed`. The X1 Carbon is shortened to `X1C`.
+     - Unchecking a printer later (Start menu → *Add Bambu Studio presets*) retires its EmberCheck presets.
      - The presets are written into **every** Bambu Studio user folder: `%APPDATA%\BambuStudio\user\<account id>\process\` for each signed-in account, `user\default\` (signed out), and the active folder named in `BambuStudio.conf` (`preset_folder`). Bambu Studio only loads the folder of the account you are signed in with.
      - Presets this tool already created are updated in place. Your own tweaks and the Bambu cloud id are kept, and the preset is marked for upload. A preset of yours that happens to have the same name is never changed.
-     - **Upgrading from 1.0/1.1:** the old `... - Optimized` presets (marked ones, or older manual ones whose post-processing line points at `bambu_optimizer.py` / `PrintOptimizer`) are backed up to `%LOCALAPPDATA%\Programs\PrintOptimizer\preset_backups\`, then retired.
+     - **Upgrading from Bambu Print Optimizer 1.x:** EmberCheck uses the same installer AppId, so it upgrades in place: the old `%LOCALAPPDATA%\Programs\PrintOptimizer` folder and the old *Print Optimizer* Start menu folder are removed, and its preset backups, preset manifest and preset log are moved to `%LOCALAPPDATA%\Programs\EmberCheck`. The old `... AI <Goal>` (1.2–1.4.0) and `... - Optimized` (1.0/1.1) presets are backed up to `%LOCALAPPDATA%\Programs\EmberCheck\preset_backups\`, then retired; tweaks you made to an `AI` preset are carried over to the `EmberCheck` preset of the same printer, layer and goal. Your own presets whose post-processing line calls `PrintOptimizer.exe` are pointed at `EmberCheck.exe` (arguments kept), even if you untick the presets option.
        - If preset sync is off, which is Bambu Studio's default, or the old preset isn't synced, it is deleted.
        - If it is synced to your Bambu account (Bambu Studio's *Sync user presets* setting is on, `app.sync_user_preset` in `BambuStudio.conf`), its post-processing line is cleared and a note is added. Bambu Studio can delete a cloud preset only through its own Delete command; a cloud preset deleted on disk is downloaded again at the next sync. **Delete it in Bambu Studio** (select it → Delete).
-   - Start menu: **Print Optimizer** (pick a sliced `.gcode.3mf` and optimize it by hand), **Add Bambu Studio presets** (run it again after adding a printer in Bambu Studio), and **Print Optimizer reports** (opens the reports folder).
-   - The finish page says what happened: how many presets were added, or that no Bambu Lab printer was found. Printers are detected from `BambuStudio.conf` (`presets.machine`, `models`) and from your user printer presets.
-3. Start Bambu Studio, pick an AI preset such as `0.20mm H2S AI Balanced`, and slice as usual.
+   - Start menu (folder **EmberCheck**): **EmberCheck** (pick a sliced `.gcode.3mf` and optimize it by hand), **Add Bambu Studio presets** (re-opens the printer selection; use it after adding a printer in Bambu Studio), and **EmberCheck reports** (opens the reports folder).
+   - The finish page says what happened: how many presets were added for which printers, or that no Bambu Lab printer was selected or found. Printers are detected from `BambuStudio.conf` (`presets.machine`, `models`) and from your user printer presets; EmberCheck never logs the conf's contents (it also holds printer access codes).
+3. Start Bambu Studio, pick an EmberCheck preset such as `0.20mm H2S EmberCheck Balanced`, and slice as usual. When the results card appears, click **Continue to Print** and print, send or export from Bambu Studio as usual: it uses the optimized file (see [docs/verify.md](docs/verify.md)).
 
 **Windows security prompts (SmartScreen and Smart App Control).** Release installers are meant to be signed through the SignPath Foundation (see [Code signing policy](#code-signing-policy)).
-- A signed installer shows *Bambu Print Optimizer* and the publisher in the Windows prompts. A new certificate or a new app can still get a SmartScreen "Windows protected your PC" warning until it builds reputation: click *More info* → *Run anyway*.
+- A signed installer shows *EmberCheck* and the publisher in the Windows prompts. A new certificate or a new app can still get a SmartScreen "Windows protected your PC" warning until it builds reputation: click *More info* → *Run anyway*.
 - **Smart App Control** (Windows 11, Settings → Privacy & security → Windows Security → App & browser control) blocks unsigned apps outright and has no *Run anyway* button. Unsigned test builds (anything from `scripts/build_wine.sh` or a local build) won't run while it is **On**; use a signed release. We don't recommend turning Smart App Control off just for this tool. On older Windows 11 builds that can't be undone without resetting Windows; recent updates let you turn it back on in the same settings page, per Microsoft's [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions).
 - Never install the throw-away self-signed test builds from `dist/test-signed/`; they exist only to check the signing pipeline.
 
-**Uninstall:** Windows Settings → Apps → *Bambu Print Optimizer* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
-- The `... AI <Goal>` presets (and any old `... - Optimized` ones) that belong to this tool are deleted.
+**Uninstall:** Windows Settings → Apps → *EmberCheck - Print Optimizer for Bambu Studio* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
+- The `... EmberCheck <Goal>` presets (and any old `... AI <Goal>` / `... - Optimized` ones) that belong to this tool are deleted.
 - Presets that are synced to your Bambu cloud account (only when preset sync is on) are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
-- Your reports in `Documents\BambuPrintOptimizer` and the preset backups are kept.
+- Your reports in `Documents\EmberCheck`, the receipt log `%LOCALAPPDATA%\EmberCheck\runs.log` and the preset backups are kept.
 
-**Silent install** (for scripting): `PrintOptimizer-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Add `/TASKS="startmenu"` to skip the presets.
+**Silent install** (for scripting): `EmberCheck-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Presets are made for the printers set up in Bambu Studio (plus those chosen last time); `/PRINTERS="X1C;P1S;A1 mini"` picks printers explicitly (short names as in the preset names, or full names such as `Bambu Lab X1 Carbon`). Add `/TASKS="startmenu"` to skip the presets.
 
 ## What you see when you slice
 
@@ -81,13 +91,16 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
   - No console window appears. The program is a Windows GUI-subsystem exe.
 - When it finishes, the G-code is written first. Then a **results card** opens in its own process, so Bambu Studio continues straight away. The card shows:
   - the status: *Optimized*, *No changes needed*, or *Check failed — G-code left unchanged*
-  - the goal, the print-time change and how much of it came from each feature (acceleration, travel order, Z-hop/retraction skip, arc fitting), hot and cold layers before → after, the number of overhang segments slowed, and open-air and un-retracted travels
+  - the goal and the **print time in hours and minutes**, e.g. `Print time: 2h 45m → 2h 29m (−16m, −9.8%)`, with its source; how much came from each feature (acceleration, travel order, Z-hop/retraction skip, speed/cooling/overhang feeds) in the same units; arc fitting; hot and cold layers before → after, the number of overhang segments slowed, and open-air and un-retracted travels
+  - **How the times are computed:** the *before* time is Bambu Studio's own estimate from the G-code header (`; model printing time:`); the *after* time is that estimate scaled by the ratio of EmberCheck's motion model after/before (the same model for both, so the change is consistent). Without a Bambu header both come from EmberCheck's model, and the card says so. Seconds are shown below 10 minutes.
+  - a one-line **How to verify** link to [docs/verify.md](docs/verify.md)
   - the top recommendations, in full. Long text wraps and the list scrolls if the screen is too small; the buttons are always visible.
   - The windows are DPI-aware, so they are sharp and sized correctly at 125%, 150% or 200% Windows display scaling (see `screens/ui_scaling/`, made by `test/ui_shots.py`).
-  - **Open full report** (the HTML report with heat maps and charts)
-  - It closes itself after 60 s unless you click it.
+  - **Continue to Print** closes the card and returns to Bambu Studio, which shows the optimized toolpath and prints/sends/exports the optimized file. (Outside Bambu Studio the button is *Close*.)
+  - **Full report** (the HTML report with heat maps and charts)
+  - It continues by itself after 60 s unless you click it.
   - A small *Support this project* link at the bottom left opens the project's Buy Me a Coffee page in your browser, only when clicked.
-- Reports, the summary JSON and `optimizer.log` are saved in `Documents\BambuPrintOptimizer\reports\`. A Documents folder moved to OneDrive is found through the Windows known-folder API.
+- Reports, the summary JSON and `optimizer.log` are saved in `Documents\EmberCheck\reports\` (an existing `Documents\BambuPrintOptimizer` folder is moved over once). Every optimized file also adds one receipt line (time, file, goal, before → after, hash) to `%LOCALAPPDATA%\EmberCheck\runs.log`. A Documents folder moved to OneDrive is found through the Windows known-folder API.
 
 | Screen | |
 |---|---|
@@ -100,30 +113,31 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 These points were checked in the Bambu Studio source and the 02.09.01.70 binary.
 - After slicing, Bambu Studio runs each line of *Process → Others → Post-processing scripts*, with the temporary G-code path as the last argument. The installer's preset sets it to:
   ```
-  "C:\Users\<you>\AppData\Local\Programs\PrintOptimizer\PrintOptimizer.exe" --goal balanced
+  "C:\Users\<you>\AppData\Local\Programs\EmberCheck\EmberCheck.exe" --goal balanced
   ```
-  (`--goal speed` / `--goal quality` for the AI Speed / AI Quality presets).
+  (`--goal speed` / `--goal quality` for the EmberCheck Speed / EmberCheck Quality presets).
 - On Windows, Bambu starts it with `CreateProcessW`, then `WaitForSingleObject(INFINITE)` and `GetExitCodeProcess`. Slicing waits until the optimizer exits.
   - Bambu does **not** hide the console window (that code is `#if 0` in the source). That is why the tool ships as a windowed exe (or use `pythonw.exe` with the Python version below).
-- The script edits the file in place. Bambu re-loads the preview from it, and the plate file you Print / Send / Export is packaged from it.
-- **Bambu's own time/filament estimate stays from the original slice.** The optimizer updates the `M73` remaining-time values the printer shows, and the results card and report show its own before/after model times.
+- The script edits the file in place. Bambu re-parses it for the **preview** (the toolpath you see is the optimized one), and Print / Send / Export G-code / Export plate sliced file all use that same file. Details and source references: [docs/verify.md](docs/verify.md).
+- **Bambu's own time/filament estimate in the slice panel stays from the original slice** (Bambu keeps the original print statistics after post-processing). EmberCheck updates the `M73` progress (P) and remaining-time (R) values in the printed part of the G-code, so the printer's display counts down the new time once the first layer starts; the card, report and stamp show the raw before → after times.
+- EmberCheck adds a comment block (`; EMBERCHECK_BLOCK_START` … `; EMBERCHECK_BLOCK_END`) after Bambu's header block with what it did and a SHA-256 of the rest of the file. Check any file with `EmberCheck.exe --check-stamp plate.gcode.3mf` (see [docs/verify.md](docs/verify.md)).
 - Exit code: it always exits 0 (also on Cancel or an internal error, which leaves the G-code untouched) unless you add `--strict`.
 - The presets can be edited like any other preset. For example, add `--fix-strings` or `--arcs off` to the post-processing line.
 
 ## Without the installer (Python version)
 
-Use `BambuPrintOptimizer-<version>-python.zip`. It is flat: the files sit at the zip root. Unzip it to `C:\BambuPrintOptimizer`.
+Use `EmberCheck-<version>-python.zip`. It is flat: the files sit at the zip root. Unzip it to `C:\EmberCheck`. (`bambu_optimizer.py` is kept as a small shim, so 1.x post-processing lines that call it keep working.)
 1. Install Python 3.11+ (python.org; tick "Add python.exe to PATH"), then run `py -m pip install --user shapely numpy`.
 2. Post-processing line. Use **pythonw.exe**, so no console window appears:
    ```
-   "C:\Users\<you>\AppData\Local\Programs\Python\Python312\pythonw.exe" "C:\BambuPrintOptimizer\bambu_optimizer.py" --goal balanced
+   "C:\Users\<you>\AppData\Local\Programs\Python\Python312\pythonw.exe" "C:\EmberCheck\embercheck.py" --goal balanced
    ```
-   Or create the presets automatically: `py C:\BambuPrintOptimizer\bambu_optimizer.py --install-presets` (and `--remove-presets` to undo).
-3. Standalone: `py C:\BambuPrintOptimizer\bambu_optimizer.py "C:\path\plate.gcode.3mf"` writes `plate.optimized.gcode.3mf`, with the G-code and its MD5 updated. Plain `.gcode` works too (`-o out.gcode`, or in place).
+   Or create the presets automatically: `py C:\EmberCheck\embercheck.py --install-presets --printers "X1C;P1S"` (or `--select` for the selection window; `--remove-presets` to undo).
+3. Standalone: `py C:\EmberCheck\embercheck.py "C:\path\plate.gcode.3mf"` writes `plate.optimized.gcode.3mf`, with the G-code and its MD5 updated. Plain `.gcode` works too (`-o out.gcode`, or in place).
 
 ## The three goals
 
-Each `AI <Goal>` preset runs the optimizer with that goal. `test/goal_matrix.py` checks these rules on the six reference prints.
+Each `EmberCheck <Goal>` preset runs the optimizer with that goal. `test/goal_matrix.py` checks these rules on the six reference prints.
 
 | Goal | Promise | What it does |
 |---|---|---|
@@ -137,7 +151,7 @@ Arc fitting (`--arcs auto`) is the same for all goals. The time limit is checked
 - Raised: sparse infill, internal solid infill and inner walls (Quality: infill only), never above `machine_max_acceleration_extruding` from the G-code header and never below the preset's own value.
 - Never raised: outer walls, overhangs, bridges, top surfaces, the first 3 layers, wipes, and anything inside protected AMS / tool-change / timelapse blocks.
 - The slicer's value is put back at every feature change, layer change, before every protected block and before any move it didn't plan (1.4.0: wipes inside a raised run, comments and `G17` no longer force a restore, so the PETG speaker on Speed now has 3,871 M204 lines instead of 20,179 in 1.3.0; the original has 2,105), and the built-in validator rejects the output if any other extrusion move has a different acceleration.
-- The motion model includes the new acceleration, so the M73 remaining time is right. The time saved by acceleration is shown separately on the results card and in the report.
+- The motion model includes the new acceleration, so the M73 remaining time and progress are right. The time saved by acceleration is shown separately on the results card and in the report.
 - Hot layers never get faster acceleration: it would shorten their cooling time. `--no-accel` turns this off.
 
 ## Options
@@ -151,7 +165,7 @@ Arc fitting (`--arcs auto`) is the same for all goals. The time limit is checked
 | `--dry-run` | Report only. |
 | `--no-reorder` | Keep the slicer's island order (smart travel order is on by default since 1.4.0; `--reorder` is still accepted). |
 | `--no-hop-skip` | Keep every Z-hop and retraction (no hop/retract skip). |
-| `--arcs auto / on / off` | Arc fitting. `auto` (default): on, except for printers with Bambu's curve planning (H2D, H2S, H2C, X2D, H2D Pro, A2L), where Bambu Studio also turns arcs off. |
+| `--arcs auto / on / off` | Arc fitting. `auto` (default): follows the target printer profile's own *arc fitting* setting in the G-code (Bambu's system profiles turn it off for printers with firmware curve planning: H2D, H2D Pro, H2S, H2C, X2D, H3C, P2S, A2L), and is always off for those models. |
 | `--fix-strings` | Add a retraction to un-retracted travels that cross more than 2 mm of open air (off by default). |
 | `--chamber 45` | Chamber temperature to assume (°C). Default: the profile's chamber temperature, or 35 °C for enclosed printers. |
 | `--material ASA` | Override the filament type used by the model. |
@@ -163,7 +177,10 @@ Arc fitting (`--arcs auto`) is the same for all goals. The time limit is checked
 | `--keep-original` | Save a copy of the un-optimized G-code next to the report. |
 | `--report-dir DIR` | Folder for reports. |
 | `--strict` | Return an error on failure (Bambu then shows a message). |
-| `--install-presets` / `--remove-presets` | Create / remove the `... AI <Goal>` Bambu Studio presets. `--pp-args "..."` adds extra arguments to their post-processing line, after their own `--goal`. |
+| `--install-presets` / `--remove-presets` | Create / remove the `... EmberCheck <Goal>` Bambu Studio presets. `--pp-args "..."` adds extra arguments to their post-processing line, after their own `--goal`. |
+| `--printers "X1C;P1S;A1 mini"` | With `--install-presets`: the printers to make presets for (short or full names). Default: the printers set up in Bambu Studio plus those chosen last time. |
+| `--select` | With `--install-presets`: show the printer selection window (the Start menu entry uses this). |
+| `--check-stamp FILE` | Check the EmberCheck stamp of an optimized `.gcode` or `.gcode.3mf`: exit 0 and *Stamp OK* if the G-code is exactly what EmberCheck wrote. See [docs/verify.md](docs/verify.md). |
 | `--open-reports` | Open the reports folder. |
 
 ## How the thermal model works, and its limits compared with Helio (please read)
@@ -186,43 +203,55 @@ What that means:
 
 ## Support development
 
-Bambu Print Optimizer is free and stays free. If it saves you time or filament, you can support its development on Buy Me a Coffee:
+EmberCheck is free and stays free. If it saves you time or filament, you can support its development on Buy Me a Coffee:
 
 **https://buymeacoffee.com/drewrobinso**
 
 The results card has a small *Support this project* link with the same address; it opens the browser only when you click it. Nothing is unlocked by donating, and the tool never shows reminders.
 
+## Icon
+
+The icon is an original design: a flame built from printed layer lines, heat-mapped orange → red, with a check badge, on a dark tile (concept B, "layers"). It does not use any Bambu Lab or Helio marks. Small sizes have their own simplified versions: at 16, 24 and 32 px fewer, thicker layer lines snapped to the pixel grid and a larger badge (at 16 px without the dark ring, with a pixel-drawn check); 48 px and up use the full design. Sources and outputs:
+- `branding/embercheck.svg` (48 px and up), `embercheck_32.svg`, `embercheck_24.svg`, `embercheck_small.svg` (16 px)
+- `branding/png/embercheck_{16,24,32,48,64,128,256}.png`
+- `packaging/icon.ico` (16, 24, 32, 48, 64, 128, 256), used for the exe, installer and shortcuts
+- `src/assets/` for the window icon and the logo on the progress window and results card
+
+Three concepts are in `branding/concepts/` (`a-flame-check`; `b-layers`, the default; `c-heat-check`), each with a 256 px PNG and a 16/24/32 px preview strip, plus `overview.png`. **To switch:** `python3 branding/make_icons.py --default a` (or `c`; needs `cairosvg`, `Pillow`), then rebuild. To use your own artwork, replace the SVGs in the concept folder (or the generator's SVG strings) and run the same command.
+
 ## Privacy
+
+Full policy: [PRIVACY.md](PRIVACY.md).
 
 This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 - Everything runs locally. There is no telemetry, no update check, and no network access.
 - The only files it writes are:
   - the G-code it is given
-  - reports and logs in `Documents\BambuPrintOptimizer`
+  - reports and logs in `Documents\EmberCheck`, and the receipt log `%LOCALAPPDATA%\EmberCheck\runs.log`
   - its own install folder
   - with the preset option, the preset files in `%APPDATA%\BambuStudio\user\<id>\process`
 - If you are signed in to Bambu Studio, Bambu Studio may sync those user presets to your Bambu cloud account, as it does with any user preset. That is Bambu Studio's behaviour, under Bambu Lab's privacy policy.
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).
+Full policy: [CODE_SIGNING.md](CODE_SIGNING.md). **Status: pending.** Current releases are unsigned. Once SignPath Foundation approves the project, signed releases carry this attribution: *Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by [SignPath Foundation](https://signpath.org).*
 
 - Committers and reviewers: [Andrew Robinson (@drewrobinso)](https://github.com/drewrobinso)
 - Approvers: [Andrew Robinson (@drewrobinso)](https://github.com/drewrobinso)
-- Privacy policy: see [Privacy](#privacy). This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
+- Privacy policy: [PRIVACY.md](PRIVACY.md) (summary under [Privacy](#privacy)). This program will not transfer any information to other networked systems unless specifically requested by the user or the person installing or operating it.
 
 How releases are signed:
 - Release binaries are built from this repository by GitHub Actions on GitHub-hosted runners (`.github/workflows/release.yml`). They are then submitted to SignPath.
 - Every signing request is approved manually by an approver.
-- Only this project's own files are signed: `PrintOptimizer.exe` and `PrintOptimizer-Setup-<version>.exe`. The signing rules are in [`packaging/signpath/`](packaging/signpath/).
+- Only this project's own files are signed: `EmberCheck.exe` and `EmberCheck-Setup-<version>.exe`. The signing rules are in [`packaging/signpath/`](packaging/signpath/).
 - The bundled open-source runtime files (Python, numpy, shapely/GEOS, Tcl/Tk) are shipped as published upstream.
 
 ## Building
 
 **Windows (same as CI):** Python 3.12 x64 and Inno Setup 6 (`choco install innosetup`), then `powershell -File scripts\build_windows.ps1`. The output goes to `dist\`:
-- `PrintOptimizer\`: the windowed one-folder app (PyInstaller)
-- `PrintOptimizer-Setup-<version>.exe`: the installer (Inno Setup, per-user)
-- `BambuPrintOptimizer-<version>-python.zip`: the flat Python-source zip
+- `EmberCheck\`: the windowed one-folder app (PyInstaller)
+- `EmberCheck-Setup-<version>.exe`: the installer (Inno Setup, per-user)
+- `EmberCheck-<version>-python.zip`: the flat Python-source zip
 
 Pinned build inputs are in `requirements-build.txt`. numpy is pinned to 1.26.4 because numpy 2.x does not run under Wine 10, which the Linux build uses.
 
@@ -234,10 +263,12 @@ WINEPREFIX=/path/prefix wine 'C:\Python312\python.exe' -m pip install -r require
 ```
 
 **Releases:**
-1. Bump `VERSION` in `src/bambu_optimizer.py`.
+1. Bump `VERSION` in `src/embercheck.py`.
 2. Push a tag `v<version>`.
 3. The workflow builds, self-tests the frozen exe, and submits the app and then the installer to SignPath (each needs approval).
-4. It creates a **draft** GitHub release with the signed installer, the Python zip, and `SHA256SUMS.txt`. Unsigned builds are never published.
+4. It creates a **draft** GitHub release with the signed installer, the Python zip, and `SHA256SUMS.txt`. The workflow never publishes unsigned builds (the unsigned 1.4.2 preview was published by hand).
+
+**Rename to EmberCheck (done with 1.4.2):** the GitHub repository `drewrobinso/bambu-print-optimizer` was renamed to `drewrobinso/embercheck` (GitHub redirects the old URLs). Still to do when signing is set up: create the SignPath project/application with the name, repository URL and artifact names (`EmberCheck.exe`, `EmberCheck-Setup-*.exe`, product name *EmberCheck*; project slug placeholder `embercheck` in `.github/workflows/release.yml`).
 
 SignPath one-time setup:
 - Repository secret `SIGNPATH_API_TOKEN`.
@@ -248,9 +279,11 @@ SignPath one-time setup:
 
 ## Files
 
-- `src/bambu_optimizer.py`: CLI / post-processing entry point (.gcode and .gcode.3mf), GUI flow, presets and Start-menu modes
+- `src/embercheck.py`: CLI / post-processing entry point (.gcode and .gcode.3mf), GUI flow, presets and Start-menu modes, stamp check
+- `src/stamp.py`: the EmberCheck stamp (comment block + body SHA-256) and `--check-stamp`
+- `src/bambu_optimizer.py`: compatibility shim for 1.x post-processing lines
 - `src/ui.py`, `src/progress.py`: progress window and results card (tkinter), staged progress reporting with cancel
-- `src/bambu_presets.py`: creates, migrates and removes the Bambu Studio `... AI <Goal>` presets
+- `src/bambu_presets.py`: printer models from `BBL.json`, creates, migrates (AI / Optimized → EmberCheck, PrintOptimizer.exe → EmberCheck.exe) and removes the Bambu Studio `... EmberCheck <Goal>` presets
 - `src/gcode_model.py`: G-code parser, protected-block detection, motion-time estimator
 - `src/optimizer.py`: geometry (islands, overhangs), thermal model, speed/fan plan, travel/stringing, island re-ordering
 - `src/emitter.py`: writes the new G-code, updates M73, runs the safety validation
@@ -261,10 +294,24 @@ SignPath one-time setup:
 - `test/goal_matrix.py`: the goal rules and per-feature time table on the six reference prints
 - `test/ui_shots.py`: renders the windows at 100/125/150/200% scaling and checks that every button is visible
 - `docs/`: one page per optimization
-- `packaging/`: PyInstaller spec, Inno Setup script, icon, SignPath artifact configurations
+- `branding/`: the icon (SVG source, PNGs, the three concepts and `make_icons.py`)
+- `src/assets/`: icon files bundled into the app (window icon, card logo)
+- `packaging/`: PyInstaller spec, Inno Setup script, `icon.ico`, SignPath artifact configurations
 - `scripts/`: build scripts (Windows / Wine), portable zip, local test signing
 
-## Test results (box, 2026-11-21, 1.4.0)
+## Test results (box, 2026-11-21)
+
+1.4.2 (`EmberCheck-Setup-1.4.2.exe`, unsigned build, Wine 10; also installed and run on the maintainer's Windows PC):
+- `test/goal_matrix.py`: all goal rules PASS on the six prints (times unchanged from 1.4.0); every output passes `verify.py`, including the independent stamp hash check.
+- `test/test_presets.py`: the H2S cases, plus a synthetic X1C/P1S/A1 mini/H2S case (72 presets; inherits and `compatible_printers` per nozzle; pruning; AI → EmberCheck migration with tweaks; repointing `PrintOptimizer.exe`) and Bambu Studio 02.09.01.70's real system profiles (15 models, 60 machine presets: every parent preset is compatible with its exact printer and nozzle).
+- `test/wine_upgrade.py`: silent upgrades **1.2.1 → 1.4.2** and **1.4.0 → 1.4.2** all PASS: default printers, `/PRINTERS="X1C;P1S;H2S"` (90 presets) and the presets task off (only the repointing).
+  - After each upgrade: the old folder and Start menu folder are gone; the backups and reports are migrated; the uninstall entry reads *EmberCheck*; the `AI` presets are retired with tweaks carried over; the user's own `PrintOptimizer.exe` preset is repointed.
+  - Uninstall removed the EmberCheck presets, the files, the shortcuts and the registry entry.
+- Interactive installer: the printer page listed all 15 models with the H2S pre-checked. H2S + X1C gave 54 presets. *Add Bambu Studio presets* (`--select`) re-opened with the last selection, and switching X1C → A1 mini retired the X1C presets.
+- Frozen exe, run the way Bambu runs it: G-code body **byte-identical** to the Linux run (same `body_sha256`), `verify.py` PASS, `runs.log` written.
+- `test/ui_shots.py`: every window at 100/125/150/200%, all buttons visible. Frozen exe `--self-test` OK; exe and installer carry the icon. Screenshot with title bar: `screens/windows_results_card.png`.
+
+### 1.4.0
 
 These are model and estimator results only. Nothing has been printed yet.
 

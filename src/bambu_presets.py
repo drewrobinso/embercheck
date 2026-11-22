@@ -1,7 +1,7 @@
-"""Create / remove "<layer>mm <printer> AI <Goal>" process presets in Bambu Studio
-(e.g. "0.20mm H2S AI Balanced"), one per main system layer-height preset x optimizer goal.
+"""Create / remove "<layer>mm <printer> EmberCheck <Goal>" process presets in Bambu Studio
+(e.g. "0.20mm X1C EmberCheck Balanced"), one per selected printer x nozzle x main system layer-height preset x goal.
 
-Used by the Windows installer (PrintOptimizer.exe --install-presets / --remove-presets) and usable by hand.
+Used by the Windows installer (EmberCheck.exe --install-presets / --remove-presets) and usable by hand.
 Format follows Bambu Studio's PresetCollection::load_presets (src/libslic3r/Preset.cpp):
   * <data_dir>/user/<user_id or "default">/process/<preset name>.json  (file name == preset name)
   * a parseable "version" is required, "inherits" must name an existing (system) preset
@@ -16,13 +16,21 @@ import sys
 import time
 
 SUFFIX = ' - Optimized'                      # 1.0-1.1 naming, migrated away from by install()
-MARK = 'Created by Bambu Print Optimizer'   # stored in the preset "description"
-GOALS = [('balanced', 'Balanced'), ('speed', 'Speed'), ('quality', 'Quality')]   # = bambu_optimizer --goal choices
-NAME_RE = re.compile(r' AI (%s)$' % '|'.join(g[1] for g in GOALS))
+MARK = 'Created by EmberCheck'                     # stored in the preset "description"
+LEGACY_MARKS = ('Created by Bambu Print Optimizer',)   # 1.1-1.4.0
+GOALS = [('balanced', 'Balanced'), ('speed', 'Speed'), ('quality', 'Quality')]   # = embercheck --goal choices
+NAME_RE = re.compile(r' EmberCheck (%s)$' % '|'.join(g[1] for g in GOALS))
+LEGACY_NAME_RE = re.compile(r' AI (%s)$' % '|'.join(g[1] for g in GOALS))   # 1.2-1.4.0 "... AI <Goal>"
+# the 1.x PrintOptimizer.exe (removed by the upgrade)
+_OLD_EXE = r'PrintOptimizer\.exe'
+OLD_EXE_RE = re.compile(r'"[^"]*%s"|\S*%s' % (_OLD_EXE, _OLD_EXE), re.I)
 # Main layer-height presets only (no "High Quality", "Strength", "Speed", ... variants), best first per layer
 MAIN_KINDS = ['Standard', 'Optimal', 'Fine', 'Draft', 'Extra Draft']
 MAX_LAYERS = 3        # per printer/nozzle: the default layer height and its nearest neighbours
 SHORT_MODEL = {'X1 Carbon': 'X1C'}
+FALLBACK_MODELS = ['Bambu Lab X1 Carbon', 'Bambu Lab X1', 'Bambu Lab X1E', 'Bambu Lab P1P', 'Bambu Lab P1S', 'Bambu Lab P2S',
+                   'Bambu Lab A1 mini', 'Bambu Lab A1', 'Bambu Lab H2D', 'Bambu Lab H2D Pro', 'Bambu Lab H2S', 'Bambu Lab H2C',
+                   'Bambu Lab X2D', 'Bambu Lab A2L']   # only used to order models when BBL.json has no machine_model_list
 
 
 def bambu_data_dir():
@@ -138,11 +146,13 @@ def user_dirs(data_dir):
 def _references_us(preset):
     pp = preset.get('post_process') if isinstance(preset, dict) else None
     txt = ' '.join(pp) if isinstance(pp, list) else str(pp or '')
-    return bool(re.search(r'bambu_optimizer\.py|printoptimizer', txt, re.I))
+    return bool(re.search(r'bambu_optimizer\.py|printoptimizer|embercheck\.exe|embercheck\.py', txt, re.I))
 
 
 def _is_ours(preset):
-    return isinstance(preset, dict) and (MARK in str(preset.get('description', '')) or _references_us(preset))
+    if not isinstance(preset, dict): return False
+    desc = str(preset.get('description', ''))
+    return MARK in desc or any(m in desc for m in LEGACY_MARKS) or _references_us(preset)
 
 
 def _read_info(path):
@@ -208,6 +218,40 @@ def bambu_running():
         return False
 
 
+def available_models(sysdir):
+    """[(printer_model, short label, [machine preset names with nozzles])] for every Bambu Lab model in the system
+    profiles, in BBL.json machine_model_list order (so new printers appear without code changes)."""
+    order = [m.get('name') for m in ((_load(os.path.join(sysdir, 'BBL.json')) or {}).get('machine_model_list') or [])
+             if isinstance(m, dict) and m.get('name')] or FALLBACK_MODELS
+    by = {}
+    for f in glob.glob(os.path.join(sysdir, 'BBL', 'machine', '*.json')):
+        j = _load(f) or {}
+        n = j.get('name') or os.path.basename(f)[:-5]
+        if str(j.get('instantiation', 'true')).lower() != 'true' or not re.search(r' \d\.\d nozzle$', n):
+            continue
+        pm = j.get('printer_model') or re.sub(r' \d\.\d nozzle$', '', n)
+        by.setdefault(pm, []).append(n)
+    models = [m for m in order if m in by] + sorted(m for m in by if m not in order)
+    return [(m, short_model({'printer_model': m}, m), sorted(by[m], key=lambda x: float(nozzle_of(x)))) for m in models]
+
+
+def model_of(machine_name, sysdir):
+    j = _load(os.path.join(sysdir, 'BBL', 'machine', machine_name + '.json')) or {}
+    return j.get('printer_model') or re.sub(r' \d\.\d nozzle$', '', machine_name)
+
+
+def resolve_models(sel, sysdir):
+    """'X1C;P1S;Bambu Lab A1 mini' (short labels or full model names, case-insensitive) -> full model names."""
+    avail = available_models(sysdir)
+    out = []
+    for tok in [t.strip() for t in re.split(r'[;,]', sel or '') if t.strip()]:
+        for m, short, _ in avail:
+            if tok.lower() in (m.lower(), short.lower(), re.sub(r'^bambu lab ', '', m.lower())):
+                if m not in out: out.append(m)
+                break
+    return out
+
+
 def short_model(machine_json, machine_name):
     m = machine_json.get('printer_model') or re.sub(r' \d\.\d nozzle$', '', machine_name)
     m = re.sub(r'^Bambu Lab ', '', m).strip()
@@ -231,11 +275,16 @@ def _process_index(sysdir):
     return idx
 
 
-def plan(data_dir, sysdir):
-    """[(preset name, parent system preset, goal, parent setting_id)] for the installed printers."""
+def plan(data_dir, sysdir, models=None):
+    """[(preset name, parent system preset, goal, parent setting_id, machine preset)] for the selected printer models
+    (every nozzle the system profiles offer), or, without a selection, for the printers set up in Bambu Studio."""
     idx = _process_index(sysdir)
     out = []
-    for m in installed_printers(data_dir, sysdir):
+    if models is None:
+        machines = installed_printers(data_dir, sysdir)
+    else:
+        machines = [n for m, _, ns in available_models(sysdir) if m in models for n in ns]
+    for m in machines:
         mj = _load(os.path.join(sysdir, 'BBL', 'machine', m + '.json')) or {}
         by_layer = {}
         for name, j in idx.get(m, []):
@@ -261,15 +310,15 @@ def plan(data_dir, sysdir):
         for lh in sorted(layers, key=float):
             parent, _, pj = by_layer[lh]
             for goal, gl in GOALS:
-                n = '%smm %s AI %s' % (lh, label, gl)
+                n = '%smm %s EmberCheck %s' % (lh, label, gl)
                 if all(x[0] != n for x in out):
-                    out.append((n, parent, goal, pj.get('setting_id', '')))
+                    out.append((n, parent, goal, pj.get('setting_id', ''), m))
     return out
 
 
 def _owned(path, j):
     base = os.path.basename(path)[:-5]
-    return (base.endswith(SUFFIX) or NAME_RE.search(base)) and _is_ours(j)
+    return (base.endswith(SUFFIX) or NAME_RE.search(base) or LEGACY_NAME_RE.search(base)) and _is_ours(j)
 
 
 def _neutralize(path, j, info, note):
@@ -311,11 +360,51 @@ def _folder_synced(ud, sync_on):
     return sync_on and os.path.basename(ud) != 'default'
 
 
-def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=(), backup_dir=None, stats=None):
-    """cmdline: post-processing line containing '{goal}', e.g. '"C:\\...\\PrintOptimizer.exe" --goal {goal}'.
-    stats (dict, optional) is filled with printers / written / removed / cleared / skipped / status."""
+def _exe_of(cmdline):
+    mm = re.match(r'\s*"([^"]+\.exe)"', cmdline or '')
+    return mm.group(1) if mm and not re.search(r'python[w]?\.exe$', mm.group(1), re.I) else None
+
+
+def repoint_line(line, new_exe):
+    """Point a post-processing line that calls the 1.x PrintOptimizer.exe at the new EmberCheck.exe (arguments kept)."""
+    return OLD_EXE_RE.sub(lambda m: '"%s"' % new_exe, line, count=1)
+
+
+def repoint(cmdline, user_dir, backup_dir=None, log=print, skip=()):
+    """Process presets in one user folder whose post-processing calls the 1.x PrintOptimizer.exe (deleted by the
+    upgrade): point them at the exe in cmdline, arguments kept. Returns the changed files."""
+    new_exe = _exe_of(cmdline); out = []
+    if not new_exe:
+        return out
+    uid = os.path.basename(user_dir)
+    for q in sorted(glob.glob(os.path.join(user_dir, 'process', '*.json'))):
+        if q in skip: continue
+        j = _load(q)
+        pp = j.get('post_process') if isinstance(j, dict) else None
+        if not isinstance(pp, list) or not any(OLD_EXE_RE.search(str(x)) for x in pp):
+            continue
+        if backup_dir: _backup(q, backup_dir, uid)
+        j = dict(j); j['post_process'] = [repoint_line(str(x), new_exe) for x in pp]
+        with open(q, 'w', encoding='utf-8') as f:
+            json.dump(j, f, indent=4)
+        qi = q[:-5] + '.info'
+        if os.path.exists(qi): _write_info(qi, _touch_info(_read_info(qi)))
+        out.append(q)
+        log('post-processing path updated to EmberCheck.exe: %s' % q)
+    return out
+
+
+def repoint_all(cmdline, data_dir=None, backup_dir=None, log=print):
+    return [q for ud in user_dirs(data_dir or bambu_data_dir()) for q in repoint(cmdline, ud, backup_dir, log)]
+
+
+def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=(), backup_dir=None, stats=None, models=None):
+    """cmdline: post-processing line containing '{goal}', e.g. '"C:\\...\\EmberCheck.exe" --goal {goal}'.
+    models: printer models to create presets for (full names, see resolve_models); None = the printers set up in
+    Bambu Studio. Our presets for printers that are no longer selected are retired.
+    stats (dict, optional) is filled with printers / written / removed / cleared / skipped / migrated / repointed / status."""
     st = stats if stats is not None else {}
-    st.update(printers=[], written=[], removed=[], cleared=[], skipped=[], status='')
+    st.update(printers=[], written=[], removed=[], cleared=[], skipped=[], migrated=[], repointed=[], pruned=[], status='')
     data_dir = data_dir or bambu_data_dir()
     sysdir = system_profiles_dir(data_dir, sysdir_extra)
     if not sysdir:
@@ -328,26 +417,43 @@ def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=(), b
     sync_on = sync_enabled(conf)
     log('Bambu cloud sync of user presets: %s' % ('on' if sync_on else 'off'))
     version = (_load(os.path.join(sysdir, 'BBL.json')) or {}).get('version', '01.00.00.00')
-    st['printers'] = installed_printers(data_dir, sysdir, conf)
+    if models is None:
+        st['printers'] = installed_printers(data_dir, sysdir, conf)
+    else:
+        st['printers'] = [n for m, _, ns in available_models(sysdir) if m in models for n in ns]
     if not st['printers']:
         st['status'] = 'noprinter'
-        log('no Bambu Lab printers found in BambuStudio.conf / user machine presets - nothing to do')
+        log('no Bambu Lab printers selected or found in BambuStudio.conf / user machine presets - nothing to do')
         return []
     log('printers: %s' % ', '.join(st['printers']))
-    todo = plan(data_dir, sysdir)
+    todo = plan(data_dir, sysdir, models)
+    names = set(t[0] for t in todo)
     written = st['written']
     for ud in user_dirs(data_dir):
         pdir = os.path.join(ud, 'process'); os.makedirs(pdir, exist_ok=True)
         uid = os.path.basename(ud)
         synced = _folder_synced(ud, sync_on)
-        # 1) migrate 1.0/1.1 "... - Optimized" presets (marked, or legacy ones pointing at this tool)
-        for old in sorted(glob.glob(os.path.join(pdir, '*' + SUFFIX + '.json'))):
-            if _is_ours(_load(old)):
-                r = _retire(old, log, backup_dir, 'Replaced by Print Optimizer presets named "<layer>mm <printer> AI <Goal>" '
-                            '(e.g. "0.20mm H2S AI Balanced"). This preset no longer post-processes - delete it in Bambu Studio.', synced)
-                st[r].append(old)
-        # 2) write the new set
-        for name, parent, goal, base_id in todo:
+        legacy = {}     # EmberCheck name -> settings of the 1.2-1.4.0 "AI" preset it replaces (user tweaks carried over)
+        # 1) retire 1.0/1.1 "... - Optimized", and 1.2-1.4.0 "... AI <Goal>" presets that belong to us
+        for old in sorted(glob.glob(os.path.join(pdir, '*.json'))):
+            base = os.path.basename(old)[:-5]
+            j = _load(old)
+            if not (base.endswith(SUFFIX) or LEGACY_NAME_RE.search(base)) or not _is_ours(j):
+                continue
+            if LEGACY_NAME_RE.search(base):
+                legacy[LEGACY_NAME_RE.sub(lambda m: ' EmberCheck ' + m.group(1), base)] = j
+            r = _retire(old, log, backup_dir, 'Replaced by EmberCheck presets named "<layer>mm <printer> EmberCheck <Goal>" '
+                        '(e.g. "0.20mm H2S EmberCheck Balanced"). This preset no longer post-processes - delete it in Bambu Studio.', synced)
+            st[r].append(old)
+        # 2) retire our EmberCheck presets for printers that are no longer selected
+        for old in sorted(glob.glob(os.path.join(pdir, '*.json'))):
+            base = os.path.basename(old)[:-5]
+            if NAME_RE.search(base) and base not in names and _is_ours(_load(old)):
+                r = _retire(old, log, backup_dir, 'This printer is no longer selected in EmberCheck; this preset no longer '
+                            'post-processes - delete it in Bambu Studio.', synced)
+                st['pruned'].append(old); st[r].append(old)
+        # 3) write the new set
+        for name, parent, goal, base_id, machine in todo:
             path = os.path.join(pdir, name + '.json')
             ipath = os.path.join(pdir, name + '.info')
             exists = os.path.exists(path)
@@ -359,35 +465,33 @@ def install(cmdline, data_dir=None, manifest=None, log=print, sysdir_extra=(), b
             line = cmdline.replace('{goal}', goal)
             if exists:      # our own preset from an earlier install: keep the user's tweaks and the cloud id
                 preset = dict(old)
-                preset['post_process'] = [line]
-                preset['description'] = MARK + '. Runs the optimizer (--goal %s) after slicing.' % goal
-                preset['inherits'] = parent
-                preset['name'] = name
                 info = _read_info(ipath)
-            else:
-                preset = {
-                    'type': 'process',
-                    'from': 'User',
-                    'inherits': parent,
-                    'is_custom_defined': '0',
-                    'name': name,
-                    'print_settings_id': name,
-                    'description': MARK + '. Runs the optimizer (--goal %s) after slicing.' % goal,
-                    'post_process': [line],
-                    'version': version,
-                }
+            elif name in legacy:   # carry the user's tweaks over from the old "AI" preset (new name = new cloud entry)
+                preset = {k: v for k, v in legacy[name].items() if k not in ('setting_id', 'print_settings_id')}
                 info = {'sync_info': '', 'user_id': '' if uid == 'default' else uid, 'setting_id': '', 'base_id': base_id}
+                st['migrated'].append(path)
+            else:
+                preset = {'type': 'process', 'from': 'User', 'is_custom_defined': '0', 'version': version}
+                info = {'sync_info': '', 'user_id': '' if uid == 'default' else uid, 'setting_id': '', 'base_id': base_id}
+            preset.update({'name': name, 'print_settings_id': name, 'inherits': parent, 'post_process': [line],
+                           'compatible_printers': [machine],
+                           'description': MARK + '. Runs EmberCheck (--goal %s) after slicing.' % goal})
+            preset.setdefault('version', version)
             with open(path, 'w', encoding='utf-8') as f:
                 json.dump(preset, f, indent=4)
             _write_info(ipath, _touch_info(info))
             written.append(path)
             log('wrote preset: %s' % path)
+        # 4) the user's own presets that call PrintOptimizer.exe (removed by this upgrade) -> EmberCheck.exe
+        st['repointed'] += repoint(cmdline, ud, backup_dir, log, skip=written)
     st['status'] = 'ok'
     st['names'] = [t[0] for t in todo]
+    st['models'] = sorted(set(re.sub(r' \d\.\d nozzle$', '', model_of(t[4], sysdir)) for t in todo))
     if manifest:
         prev = (_load(manifest) or {}).get('presets', [])
         with open(manifest, 'w', encoding='utf-8') as f:
-            json.dump({'presets': sorted(set(prev) | set(written)), 'cmdline': cmdline}, f, indent=1)
+            json.dump({'presets': sorted(set(prev) | set(written)), 'cmdline': cmdline,
+                       'models': models if models is not None else None}, f, indent=1)
     return written
 
 
@@ -395,28 +499,35 @@ def status_text(st):
     """One short paragraph for the installer's finish page / message box."""
     s = st.get('status')
     if s == 'noprinter':
-        return ('No Bambu Lab printer was found in Bambu Studio, so no AI presets were added. Open Bambu Studio, add or '
-                'select your printer, close Bambu Studio, then run Start menu > Print Optimizer > "Add Bambu Studio presets".')
+        return ('No Bambu Lab printer was selected or found in Bambu Studio, so no EmberCheck presets were added. Run Start menu > '
+                'EmberCheck > "Add Bambu Studio presets" and pick your printers.')
     if s == 'nosystem':
-        return ('Bambu Studio\'s printer profiles were not found, so no AI presets were added. Start Bambu Studio once, '
-                'close it, then run Start menu > Print Optimizer > "Add Bambu Studio presets".')
+        return ('Bambu Studio\'s printer profiles were not found, so no EmberCheck presets were added. Start Bambu Studio once, '
+                'close it, then run Start menu > EmberCheck > "Add Bambu Studio presets".')
     if s != 'ok':
         return 'The Bambu Studio presets could not be added (see presets.log in the install folder).'
     names = st.get('names') or []
-    out = 'Added %d AI presets for %s, e.g. "%s".' % (len(names), ', '.join(
-        re.sub(r'^Bambu Lab ', '', p) for p in st.get('printers', [])), names[len(names) // 2] if names else '')
-    if st.get('removed'):
-        out += ' Old "... - Optimized" presets were removed.'
+    models = [short_model({'printer_model': m}, m) for m in st.get('models') or []]
+    eg = next((n for n in names if n.startswith('0.20mm') and n.endswith('Balanced')), names[0] if names else '')
+    out = 'Added %d EmberCheck presets for %s, e.g. "%s".' % (len(names), ', '.join(models) or 'your printers', eg)
+    if st.get('migrated'):
+        out += ' Settings of the old "AI" presets (including your changes) were carried over.'
+    old = [p for p in st.get('removed', []) + st.get('cleared', []) if p not in st.get('pruned', [])]
+    if old:
+        out += ' %d old "AI" / "- Optimized" preset(s) were replaced.' % len(old)
     if st.get('cleared'):
-        out += (' %d old "... - Optimized" preset(s) synced to your Bambu account were switched off - delete them in '
-                'Bambu Studio.' % len(st['cleared']))
+        out += (' %d preset(s) synced to your Bambu account were switched off - delete them in Bambu Studio.' % len(st['cleared']))
+    if st.get('pruned'):
+        out += ' EmberCheck presets of printers you unchecked were removed (%d file(s)).' % len(st['pruned'])
+    if st.get('repointed'):
+        out += ' %d of your own preset(s) now call EmberCheck.exe instead of PrintOptimizer.exe.' % len(st['repointed'])
     if st.get('skipped'):
         out += ' %d preset name(s) were already used by your own presets and were left alone.' % len(st['skipped'])
     return out + ' Restart Bambu Studio to see them.'
 
 
 def remove(data_dir=None, manifest=None, log=print, backup_dir=None):
-    """Undo install() in every user/<id> folder: our "... AI <Goal>" and old "... - Optimized" presets only.
+    """Undo install() in every user/<id> folder: our "... EmberCheck <Goal>", "... AI <Goal>" and "... - Optimized" presets only.
     Deleted, except cloud-synced ones (sync on + cloud id), which are cleared (see _retire) because Bambu Studio
     would re-download a locally deleted cloud preset - still calling the removed exe, so slicing would fail."""
     data_dir = data_dir or bambu_data_dir()
@@ -430,7 +541,7 @@ def remove(data_dir=None, manifest=None, log=print, backup_dir=None):
         if j is None or not _owned(p, j):
             continue     # never touch unrelated presets
         ud = os.path.dirname(os.path.dirname(p))
-        _retire(p, log, None, 'Bambu Print Optimizer was uninstalled; this preset no longer post-processes. Delete it in Bambu Studio.',
+        _retire(p, log, None, 'EmberCheck was uninstalled; this preset no longer post-processes. Delete it in Bambu Studio.',
                 _folder_synced(ud, sync_on))
         done.append(p)
     return done

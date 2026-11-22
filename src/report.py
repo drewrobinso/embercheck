@@ -1,9 +1,40 @@
 """Self-contained HTML report (inline SVG, no internet needed)."""
-import html, math, datetime
+import html, math, datetime, re
 from gcode_model import estimate_times
 
 def _mb(n):
     return '%.1f MB' % (n / 1e6)
+
+
+def fmt_dur(sec):
+    """Human print time: '1h 45m', '45m', and with seconds under 10 minutes: '9m 05s', '42s'."""
+    sec = abs(float(sec or 0)); s = int(round(sec))
+    if s < 60: return '%ds' % s
+    if s < 600:
+        m, x = divmod(s, 60); return '%dm %02ds' % (m, x)
+    m = int(round(sec / 60.0)); h, m = divmod(m, 60)
+    return ('%dh %02dm' % (h, m)) if h else ('%dm' % m)
+
+
+def fmt_delta(sec, minus='\u2212'):
+    if abs(sec) < 0.5: return '\u00b10s'.replace('\u00b1', '+/-' if minus == '-' else '\u00b1')
+    return ('+' if sec > 0 else minus) + fmt_dur(sec)
+
+
+def parse_hms(txt):
+    """'2h 45m 7s' / '1d 2h 3m' / '45m 7s' -> seconds (None if not parseable)."""
+    if not txt: return None
+    tot = 0; ok = False
+    for v, u in re.findall(r'(\d+(?:\.\d+)?)\s*([dhms])', txt):
+        tot += float(v) * {'d': 86400, 'h': 3600, 'm': 60, 's': 1}[u]; ok = True
+    return tot if ok else None
+
+
+def time_line(before, after, minus='\u2212', arrow='\u2192'):
+    """'1h 45m -> 1h 30m (-15m, -14.3%)'."""
+    pct = 100.0 * (after - before) / before if before else 0.0
+    return '%s %s %s (%s, %s%.1f%%)' % (fmt_dur(before), arrow, fmt_dur(after), fmt_delta(after - before, minus),
+                                       ('+' if pct > 0 else (minus if pct < 0 else '')), abs(pct))
 
 
 def fmt_t(s):
@@ -109,7 +140,7 @@ def recommendations(opt, summary):
         recs.append(('Goal', '%s goal keeps print time %s, so %d layers predicted too hot were left as they are (layers %s). Use the <b>%s</b> preset for this print to fix them, or apply the cooling settings below.' % (
             goal.capitalize(), 'at or below the original' if goal == 'speed' else 'within +2%', left,
             _layer_list([i + 1 for i, e in enumerate(opt.opt) if e.Tmax is not None and e.Tmax > opt.mat['t_high']]),
-            'AI Balanced or AI Quality' if goal == 'speed' else 'AI Quality')))
+            'EmberCheck Balanced or EmberCheck Quality' if goal == 'speed' else 'EmberCheck Quality')))
     if hot:
         need = summary.get('hot_layer_time_needed')
         recs.append(('Cooling / min layer time', 'Bambu Studio &rsaquo; Filament &rsaquo; Cooling: <b>Slow printing down for better layer cooling</b> (slow_down_layer_time) is %gs. %d layers are predicted too hot. Raising it%s, printing 2+ copies at once, or adding a sacrificial "cooling tower" next to small parts fixes this at the source.' % (
@@ -157,8 +188,8 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
     lo, hi = opt.mat['t_low'], opt.mat['t_high']
     base, new = opt.base, opt.opt
     nl = opt.nl
-    o = ['<!doctype html><html><head><meta charset="utf-8"><title>Print Optimizer report - %s</title><style>%s</style></head><body>' % (html.escape(src_name), CSS)]
-    o.append('<h1>Bambu Print Optimizer report</h1><p><b>%s</b><br><small>%s &middot; generated %s &middot; %s</small></p>' % (
+    o = ['<!doctype html><html><head><meta charset="utf-8"><title>EmberCheck report - %s</title><style>%s</style></head><body>' % (html.escape(src_name), CSS)]
+    o.append('<h1>EmberCheck report <small style="font-weight:normal">print optimizer for Bambu Studio</small></h1><p><b>%s</b><br><small>%s &middot; generated %s &middot; %s</small></p>' % (
         html.escape(src_name), html.escape(opt.g.config.get('printer_model', 'unknown printer')), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), html.escape(settings_desc)))
     if validation['errors']:
         o.append('<p class="bad"><b>Optimised G-code was NOT written</b> - safety check failed: %s. Your file is unchanged.</p>' % html.escape('; '.join(validation['errors'])))
@@ -167,19 +198,27 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
     else:
         o.append('<p class="ok">Optimised G-code written and verified: same layers, same extrusion per layer, start/end/AMS/timelapse blocks untouched.</p>')
     k = summary
+    fs = k.get('feature_saved_s') or {}
+    fd = lambda key, alt: fmt_delta(-fs[key]) if key in fs else '-' + fmt_t(alt)
+    if k.get('time_before_s'):
+        o.append('<p style="font-size:19px"><b>Print time: %s</b><br><small>Source: %s.%s</small></p>' % (
+            time_line(k['time_before_s'], k['time_after_s']), html.escape(k.get('time_source', '')),
+            (' Stamp body SHA-256: <code>%s</code>' % k['body_sha256']) if k.get('body_sha256') else ''))
     o.append('<div class="kpi">')
     for lab, val in [('Material (model preset)', '%s%s' % (opt.mat_name, ' (guessed)' if opt.mat_guess else '')),
                      ('Chamber assumed', '%g&deg;C' % opt.T_env),
                      ('Slicer time estimate', html.escape(k['bambu_time'] or 'n/a')),
                      ('Our model: before', fmt_t(k['t_before'])), ('Our model: after', fmt_t(k['t_after'])),
-                     ('Time change', '%+.1f%% (%s)' % (k['dt_pct'], ('-' if k['t_after'] < k['t_before'] else '+') + fmt_t(abs(k['t_before'] - k['t_after'])))),
-                     ('Of which acceleration', '-%s (%.1f%%, %d layers, up to %d mm/s&sup2;)' % (
-                         fmt_t(k.get('acc_saved_s', 0.0)), k.get('acc_saved_pct', 0.0), k.get('acc_layers', 0), k.get('acc_target_max', 0))
+                     ('Print time', time_line(k['time_before_s'], k['time_after_s']) if k.get('time_before_s') else '%+.1f%%' % k['dt_pct']),
+                     ('Of which acceleration', '%s (%.1f%%, %d layers, up to %d mm/s&sup2;)' % (
+                         fd('acceleration', k.get('acc_saved_s', 0.0)), k.get('acc_saved_pct', 0.0), k.get('acc_layers', 0), k.get('acc_target_max', 0))
                       if k.get('acc_saved_s') else 'unchanged'),
-                     ('Of which travel order', ('-%s (%.0f mm less travel, %d runs)' % (fmt_t(k.get('travel_saved_s', 0.0)),
+                     ('Of which travel order', ('%s (%.0f mm less travel, %d runs)' % (fd('travel order', k.get('travel_saved_s', 0.0)),
                          k.get('travel_saved_mm', 0.0), k.get('reorder_runs', 0))) if k.get('reorder_runs') else 'unchanged'),
-                     ('Of which hop/retract skip', ('-%s (%d Z-hops, %d retracts skipped)' % (fmt_t(k.get('hop_saved_s', 0.0)),
+                     ('Of which hop/retract skip', ('%s (%d Z-hops, %d retracts skipped)' % (fd('hop/retract skip', k.get('hop_saved_s', 0.0)),
                          k.get('hops_skipped', 0), k.get('retracts_skipped', 0))) if k.get('hops_skipped') or k.get('retracts_skipped') else 'unchanged'),
+                     ('Of which speed/cooling/overhang feeds', fmt_delta(-fs['speed/cooling/overhang feeds'])
+                      if 'speed/cooling/overhang feeds' in fs else 'n/a'),
                      ('Arc fitting', ('%d arcs replace %d moves' % (k.get('arcs', 0), k.get('arc_segments', 0))) if k.get('arcs_on')
                       else 'off (%s)' % html.escape(k.get('arcs_note') or 'off')),
                      ('G-code size / M204 lines', '%s &rarr; %s / %d &rarr; %d' % (_mb(k.get('bytes_before', 0)), _mb(k.get('bytes_after', 0)),
@@ -190,7 +229,7 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
                      ('Hot layers', '%d &rarr; %d' % (k['hot_before'], k['hot_after'])),
                      ('Cold layers', '%d &rarr; %d%s' % (k['cold_before'], k['cold_after'], '' if opt.mat['cold_matters'] else ' (info)'))]:
         o.append('<div>%s<b>%s</b></div>' % (lab, val))
-    o.append('</div><p><small>Temperatures are from a simplified, uncalibrated thermal model (not a physics simulation) - use them to compare layers and before/after, not as measured values. Time values come from our own motion estimate; the printer may differ by a few %.</small></p>')
+    o.append('</div><p><small>Temperatures are from a simplified, uncalibrated thermal model (not a physics simulation) - use them to compare layers and before/after, not as measured values. Raw print times use Bambu Studio&#39;s own estimate from the G-code header, scaled by EmberCheck&#39;s motion model (the same model before and after); the printer may differ by a few %.</small></p>')
     xs = list(range(1, nl + 1))
     o.append('<h2>Predicted interlayer temperature</h2>')
     o.append(line_chart([

@@ -4,8 +4,8 @@ New in 1.4.0.
 
 ## Bambu firmware support
 - Bambu printers' firmware accepts G2/G3, and Bambu Studio's own *Arc fitting* option (ArcWelder-based, `enable_arc_fitting`) writes them ([Bambu Lab wiki: Arc move](https://wiki.bambulab.com/en/software/bambu-studio/acr-move)).
-- The H2D, H2S, H2C, X2D (and H2D Pro, A2L) firmware has its own **curve planning**, and Bambu Studio turns arc fitting off for these printers because arcs interfere with it. The H2S test slices have `enable_arc_fitting = 0`.
-- So `--arcs auto` (the default) is **off** for those models (detected from the G-code's printer model) and on for other printers. `--arcs on` forces it, `--arcs off` disables it. The card and report say when and why it is off.
+- The H2D, H2D Pro, H2S, H2C, X2D, H3C, P2S and A2L firmware has its own **curve planning**, and Bambu Studio's system profiles turn arc fitting off for these printers (`enable_arc_fitting = 0` in the resolved 02.09.01.70 profiles; X1C, A1 mini and the other older models have it on). The H2S test slices have `enable_arc_fitting = 0`.
+- Since 1.4.2, `--arcs auto` (the default) follows the **target printer profile's own `enable_arc_fitting`** from the G-code's config block, and is always off for the curve-planning models above (detected from `printer_model`). On an X1C-profile copy of the speaker slice it fitted 621 arcs replacing 2,787 moves (verify.py PASS). `--arcs on` forces it, `--arcs off` disables it. The card and report say when and why it is off.
 
 ## What it does
 - Looks at runs of 3 or more consecutive `G1 X Y E` moves in the emitted file that come from consecutive original lines of the same feature, with no comments and `F` only on the first move.

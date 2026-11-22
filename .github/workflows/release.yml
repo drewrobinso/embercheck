@@ -7,7 +7,9 @@
 #     (the values below are placeholders/defaults used when the variables are not set)
 #   * In SignPath: artifact configurations "app" and "installer" = packaging/signpath/app.xml / installer.xml
 #
-# Without SIGNPATH_API_TOKEN the workflow still builds and uploads UNSIGNED artifacts, but never publishes a release.
+# Without SIGNPATH_API_TOKEN the workflow still builds and uploads UNSIGNED artifacts (signing steps are skipped, the run
+# succeeds), but never publishes a release. An existing release for the tag (e.g. a manually published unsigned
+# pre-release) is never modified: the signed files stay in the run's artifacts and go into a new draft by hand.
 name: build-and-release
 
 on:
@@ -21,7 +23,7 @@ permissions:
 
 env:
   SIGNPATH_ORGANIZATION_ID: ${{ vars.SIGNPATH_ORGANIZATION_ID || '00000000-0000-0000-0000-000000000000' }}  # placeholder
-  SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'bambu-print-optimizer' }}                    # placeholder
+  SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG || 'embercheck' }}                    # placeholder
   SIGNPATH_SIGNING_POLICY_SLUG: ${{ vars.SIGNPATH_SIGNING_POLICY_SLUG || 'release-signing' }}            # 'test-signing' until approved
 
 jobs:
@@ -46,7 +48,7 @@ jobs:
         id: ver
         shell: pwsh
         run: |
-          $v = (Select-String -Path src\bambu_optimizer.py -Pattern "^VERSION = '(.+)'").Matches[0].Groups[1].Value
+          $v = (Select-String -Path src\embercheck.py -Pattern "^VERSION = '(.+)'").Matches[0].Groups[1].Value
           if ($env:GITHUB_REF -like 'refs/tags/v*' -and $env:GITHUB_REF_NAME -ne "v$v") { throw "tag $env:GITHUB_REF_NAME does not match VERSION $v" }
           "version=$v" >> $env:GITHUB_OUTPUT
 
@@ -57,16 +59,16 @@ jobs:
         shell: pwsh
         run: |
           python -m py_compile (Get-ChildItem src\*.py).FullName
-          python src\bambu_optimizer.py --self-test
+          python src\embercheck.py --self-test
           python test\test_presets.py
 
       - name: Build app (PyInstaller, windowed one-folder)
-        run: python -m PyInstaller packaging\PrintOptimizer.spec --noconfirm --clean --distpath dist --workpath build\pyi
+        run: python -m PyInstaller packaging\EmberCheck.spec --noconfirm --clean --distpath dist --workpath build\pyi
 
       - name: Self-test the frozen exe
         shell: pwsh
         run: |
-          $p = Start-Process dist\PrintOptimizer\PrintOptimizer.exe -ArgumentList '--self-test','--report','selftest.txt' -Wait -PassThru
+          $p = Start-Process dist\EmberCheck\EmberCheck.exe -ArgumentList '--self-test','--report','selftest.txt' -Wait -PassThru
           Get-Content selftest.txt
           if ($p.ExitCode -ne 0) { throw "frozen self-test failed ($($p.ExitCode))" }
 
@@ -75,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: app-unsigned
-          path: dist/PrintOptimizer/
+          path: dist/EmberCheck/
           if-no-files-found: error
 
       - name: Sign app (SignPath)
@@ -98,9 +100,9 @@ jobs:
         if: env.HAS_SIGNPATH == 'true'
         shell: pwsh
         run: |
-          Remove-Item -Recurse -Force dist\PrintOptimizer
-          Copy-Item -Recurse signed-app dist\PrintOptimizer
-          Get-AuthenticodeSignature dist\PrintOptimizer\PrintOptimizer.exe | Format-List Status,SignerCertificate
+          Remove-Item -Recurse -Force dist\EmberCheck
+          Copy-Item -Recurse signed-app dist\EmberCheck
+          Get-AuthenticodeSignature dist\EmberCheck\EmberCheck.exe | Format-List Status,SignerCertificate
 
       - name: Build installer (Inno Setup)
         shell: pwsh
@@ -115,7 +117,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: installer-unsigned
-          path: dist/PrintOptimizer-Setup-${{ steps.ver.outputs.version }}.exe
+          path: dist/EmberCheck-Setup-${{ steps.ver.outputs.version }}.exe
           if-no-files-found: error
 
       - name: Sign installer (SignPath)
@@ -141,17 +143,20 @@ jobs:
           New-Item -ItemType Directory -Force release | Out-Null
           $v = '${{ steps.ver.outputs.version }}'
           if ($env:HAS_SIGNPATH -eq 'true') {
-            Copy-Item "signed-installer\PrintOptimizer-Setup-$v.exe" release\
-            $sig = Get-AuthenticodeSignature "release\PrintOptimizer-Setup-$v.exe"
+            Copy-Item "signed-installer\EmberCheck-Setup-$v.exe" release\
+            $sig = Get-AuthenticodeSignature "release\EmberCheck-Setup-$v.exe"
             $sig | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate
             if ($sig.Status -ne 'Valid') { throw "installer signature is not valid: $($sig.Status)" }
             "signed=true" >> $env:GITHUB_OUTPUT
           } else {
-            Copy-Item "dist\PrintOptimizer-Setup-$v.exe" release\
+            Copy-Item "dist\EmberCheck-Setup-$v.exe" release\
             "signed=false" >> $env:GITHUB_OUTPUT
           }
-          Copy-Item "dist\BambuPrintOptimizer-$v-python.zip" release\
+          Copy-Item "dist\EmberCheck-$v-python.zip" release\
           Get-ChildItem release | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash, $_.Name } | Tee-Object release\SHA256SUMS.txt
+          if ($env:HAS_SIGNPATH -ne 'true') {
+            "### Unsigned build`nSignPath is not configured (no ``SIGNPATH_API_TOKEN``), so signing was skipped and no release was created. The unsigned files are in the run artifacts." >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - uses: actions/upload-artifact@v7
         with:
@@ -173,5 +178,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "::notice::Release $GITHUB_REF_NAME already exists; its assets are left unchanged. Signed files: artifact release-files."
+            exit 0
+          fi
           gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" --draft --generate-notes \
-            --title "Bambu Print Optimizer ${{ needs.build.outputs.version }}"
+            --title "EmberCheck ${{ needs.build.outputs.version }}"

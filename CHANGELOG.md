@@ -1,6 +1,41 @@
 # Changelog
 
-All notable changes. Versions follow `VERSION` in `src/bambu_optimizer.py`. Test numbers are from the build box (Bambu Studio 02.09.01.70 CLI slices for the H2S 0.4, six reference prints: four 225-layer towers in PLA/PETG/ABS/ASA and the 166-layer speaker adapter in PETG/ASA). Times are the optimizer's own motion model, not measured prints. Windows builds were tested under Wine 10, not yet on a real Windows PC.
+All notable changes. Versions follow `VERSION` in `src/embercheck.py` (`src/bambu_optimizer.py` up to 1.4.0). EmberCheck was called **Bambu Print Optimizer** up to 1.4.0. Test numbers are from the build box (Bambu Studio 02.09.01.70 CLI slices for the H2S 0.4, six reference prints: four 225-layer towers in PLA/PETG/ABS/ASA and the 166-layer speaker adapter in PETG/ASA). Times are the optimizer's own motion model, not measured prints. Windows builds were tested under Wine 10; 1.4.2 was also installed and run on the maintainer's Windows PC.
+
+## [1.4.2] - 2026-11-21 — renamed to EmberCheck
+
+### Renamed: Bambu Print Optimizer → **EmberCheck — Print Optimizer for Bambu Studio**
+- `EmberCheck.exe`, `EmberCheck-Setup-<version>.exe`, install folder `%LOCALAPPDATA%\Programs\EmberCheck`, Start menu folder *EmberCheck*, reports in `Documents\EmberCheck\reports` (an existing `Documents\BambuPrintOptimizer` is moved over once), window titles *EmberCheck · Print Optimizer for Bambu Studio*, presets `<layer>mm <printer> EmberCheck Balanced / Speed / Quality`.
+- Python entry point `src/embercheck.py`; `src/bambu_optimizer.py` stays as a shim, so 1.x Python post-processing lines keep working.
+- All links point to `github.com/drewrobinso/embercheck` (the old repository URL redirects).
+
+### Upgrade
+- **Upgrade in place** from Bambu Print Optimizer 1.x (same installer AppId): the old `Programs\PrintOptimizer` folder and the old *Print Optimizer* Start menu folder are removed; preset backups, the preset manifest and the preset log are moved to the new folder.
+- The old `... AI <Goal>` and `... - Optimized` presets are backed up and retired; tweaks you made to an `AI` preset are carried over to the matching `EmberCheck` preset. Your own presets that call `PrintOptimizer.exe` are pointed at `EmberCheck.exe`, even if you untick the presets option.
+
+### Added
+- **Every Bambu Lab printer.** The installer has a printer page listing every model in Bambu Studio's own system profiles (`BBL.json` `machine_model_list`, not a hard-coded list: 15 models in 02.09.01.70) with the printers set up in Bambu Studio pre-checked. Presets are created for every nozzle each checked printer offers, each inheriting that printer's and nozzle's system process preset, with `compatible_printers` set to it (e.g. `0.20mm X1C EmberCheck Balanced`, `0.30mm X1C 0.6 EmberCheck Speed`, `0.20mm A1 mini EmberCheck Balanced`). Unchecked printers' presets are retired. Silent installs use the detected printers, or `/PRINTERS="X1C;P1S;A1 mini"`. The Start menu *Add Bambu Studio presets* re-opens the selection. New CLI flags `--printers`, `--select`.
+- **EmberCheck stamp**: a `; EMBERCHECK_BLOCK_START` … `; EMBERCHECK_BLOCK_END` comment block after Bambu's header block with the version, date, goal, raw print times, per-feature savings, change counts and the SHA-256 of the rest of the file. Comments only (ASCII, < 200 characters per line); Bambu's header, thumbnails and config block stay byte-identical. New `--check-stamp FILE` (.gcode or .gcode.3mf, also checks the 3MF's plate MD5). A file that already has a stamp is never optimized again. See [docs/verify.md](docs/verify.md).
+- **Raw print times** on the card headline, in the per-feature lines, the report and the stamp, e.g. `Print time: 2h 45m → 2h 29m (−16m, −9.8%)`. The *before* time is Bambu Studio's own header estimate, the *after* time that estimate scaled by EmberCheck's motion-model ratio (one model for both); without a header both are EmberCheck's model, and the source is shown. Seconds below 10 minutes.
+- **Receipt log** `%LOCALAPPDATA%\EmberCheck\runs.log`: one line per optimized file (time with UTC offset, file, goal, before → after, source, body SHA-256).
+- Results card: the close button is now **Continue to Print** when EmberCheck runs from Bambu Studio (it returns to Bambu Studio, which prints the optimized file), plus a one-line *How to verify* link to docs/verify.md. *Full report* is the secondary button.
+- [docs/verify.md](docs/verify.md): what Bambu Studio previews, prints, sends and exports after post-processing, with source file and line references (Bambu Studio `v02.09.01.70`, `v02.08.02.61`).
+- **App icon**: an original flame built from printed layer lines, heat-mapped orange → red, with a check badge on a dark tile. 16, 24 and 32 px have simplified, pixel-aligned versions (fewer, thicker lines; larger badge; no badge ring and a pixel-drawn check at 16 px). It is used for the exe, installer, shortcuts, window icon, and as a small logo on the progress window and results card. SVG sources, PNGs (16–256) and a multi-size `.ico` are in `branding/`. Three concepts are in `branding/concepts/` (B is the default); switch with `python3 branding/make_icons.py --default a|c`.
+- [PRIVACY.md](PRIVACY.md) (no data collected or sent; which links open on click; local files) and [CODE_SIGNING.md](CODE_SIGNING.md) (SignPath Foundation policy: official repo, signed files, CI-only signing with per-release manual approval, roles; signing pending), linked from the README's install section and included in the Python zip with the icon assets.
+
+### Changed
+- **M73 progress (P) is now rewritten together with the remaining time (R)**, so the printer's progress bar and countdown follow the optimized print once layer 1 starts. The M73 lines inside the start G-code stay as sliced.
+- **`--arcs auto` follows the target printer profile's own `enable_arc_fitting`** from the G-code (Bambu's 02.09 system profiles: on for X1C, A1 mini and other older models, off for curve-planning printers), and is always off on the curve-planning models, now including H3C and P2S.
+- Acceleration, speed and fan limits were already read from each G-code's own printer and filament profile (`machine_max_acceleration_*`, fan settings), so they follow the target printer; this is now documented.
+- `test/verify.py` removes the stamp block before comparing and checks `body_sha256` independently.
+
+### Tests
+- `test/goal_matrix.py`: all rules PASS on the six reference prints (all goals and variants, stress cases); every output passes `verify.py` including the stamp hash. Times unchanged from 1.4.0 (e.g. PETG speaker Speed −16.30%, Balanced −9.84%).
+- `test/test_presets.py`: new multi-printer case (synthetic X1C 0.2/0.4/0.6/0.8, P1S 0.4/0.6, A1 mini, H2S: 72 presets, inherits and compatible_printers per nozzle, `--printers` parsing, detection from the conf, pruning, AI → EmberCheck migration with tweaks, repointing `PrintOptimizer.exe`, no access code in logs) and a real-profiles case (Bambu Studio 02.09.01.70 system profiles: 15 models, 60 machine presets, 396 presets, every parent compatible with its exact printer/nozzle).
+- X1C-profile copy of the PETG speaker: `--arcs auto` fitted 621 arcs (2,787 moves), verify PASS; with `enable_arc_fitting = 0` arcs stay off.
+- `--check-stamp`: OK on EmberCheck output (.gcode and .gcode.3mf), FAIL on the original and after changing one byte (3MF: also the plate MD5 mismatch).
+- `test/ui_shots.py`: cards, printer selection and progress at 100/125/150/200 %: all 20 windows OK.
+- `test/wine_upgrade.py` (Wine 10): silent upgrades from 1.2.1 and 1.4.0 (default printers, 3 printers, presets off) PASS: old folder and Start menu removed, backups migrated, `AI` presets retired with tweaks carried over, own presets repointed to `EmberCheck.exe`, clean uninstall. Installed and run on Windows by the maintainer.
 
 ## [1.4.0] - 2026-11-21
 

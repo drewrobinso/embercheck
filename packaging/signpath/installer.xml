@@ -1,13 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- SignPath artifact configuration (slug: installer). Upload = ZIP containing PrintOptimizer-Setup-<version>.exe
+<!-- SignPath artifact configuration (slug: installer). Upload = ZIP containing EmberCheck-Setup-<version>.exe
      (built by Inno Setup from the already-signed app). Signs only the setup exe. -->
 <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
   <parameters>
     <parameter name="version" required="true" />
   </parameters>
   <zip-file>
-    <pe-file-set product-name="Bambu Print Optimizer" product-version="${version}" company-name="Andrew Robinson">
-      <include path="PrintOptimizer-Setup-${version}.exe" min-matches="1" max-matches="1" />
+    <pe-file-set product-name="EmberCheck" product-version="${version}" company-name="Andrew Robinson">
+      <include path="EmberCheck-Setup-${version}.exe" min-matches="1" max-matches="1" />
       <for-each>
         <authenticode-sign />
       </for-each>

@@ -11,7 +11,22 @@ Default:  line-by-line alignment: only F/S/M73 values may change; allowed insert
 --reordered: skip the line alignment (island order may differ)."""
 import sys, re, math, collections
 from decimal import Decimal
-o = open(sys.argv[1]).read().splitlines(); n = open(sys.argv[2]).read().splitlines()
+import hashlib
+
+
+def unstamp(path):
+    """Drop the EmberCheck block ('; EMBERCHECK_BLOCK_START' .. '; EMBERCHECK_BLOCK_END') and check its body_sha256 independently."""
+    raw = open(path, encoding='utf-8', errors='surrogateescape', newline='').read()
+    m = re.search(r'^; EMBERCHECK_BLOCK_START[^\n]*\n(?:.*\n)*?; EMBERCHECK_BLOCK_END[^\n]*(?:\r?\n|$)', raw, re.M)
+    if not m: return raw, None
+    rest = raw[:m.start()] + raw[m.end():]
+    want = re.search(r'^; body_sha256: ([0-9a-f]{64})', m.group(0), re.M)
+    got = hashlib.sha256(rest.encode('utf-8', errors='surrogateescape')).hexdigest()
+    return rest, bool(want and want.group(1) == got)
+
+
+o_txt, _ = unstamp(sys.argv[1]); n_txt, STAMP_OK = unstamp(sys.argv[2])
+o = o_txt.splitlines(); n = n_txt.splitlines()
 reordered = '--reordered' in sys.argv
 ARC_TOL = float(sys.argv[sys.argv.index('--arc-tol') + 1]) if '--arc-tol' in sys.argv else 0.05
 WORD = re.compile(r'([A-Z])([-+]?(?:\d+\.?\d*|\.\d+))')
@@ -169,7 +184,8 @@ fn = [float(m) for t in n if t.startswith('M106 S') for m in re.findall(r'S([\d.
 res['max_fan_S_orig/new'] = (max(fo), max(fn))
 Fs = lambda L: [float(m) for t in L if t.startswith(('G1', 'G0', 'G2', 'G3')) for m in re.findall(r'\sF([\d.]+)', t)]
 res['max_F_orig/new'] = (max(Fs(o)), max(Fs(n)))
+res['embercheck_stamp'] = 'none' if STAMP_OK is None else ('body_sha256 OK' if STAMP_OK else 'HASH MISMATCH')
 ok = (res['layers_orig'] == res['layers_new'] and not e_bad and res['start_block_identical'] and res['end_block_identical']
-      and res['temperature_lines_identical'] and res['protected_cmds_identical'] and not geo_bad and not bad)
+      and res['temperature_lines_identical'] and res['protected_cmds_identical'] and not geo_bad and not bad and STAMP_OK is not False)
 for k, v in res.items(): print('%-30s %s' % (k, v))
 print('PASS' if ok else 'FAIL'); sys.exit(0 if ok else 1)

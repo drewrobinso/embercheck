@@ -1,6 +1,6 @@
 # Goals: Speed, Balanced, Quality
 
-Every `AI <Goal>` preset runs the optimizer with `--goal speed|balanced|quality`. Since 1.3.0 each goal makes a promise that is enforced and tested, not just a different set of factors.
+Every `EmberCheck <Goal>` preset runs the optimizer with `--goal speed|balanced|quality`. Since 1.3.0 each goal makes a promise that is enforced and tested, not just a different set of factors.
 
 | Goal | Promise | Tools |
 |---|---|---|
@@ -16,7 +16,7 @@ Arc fitting (`--arcs auto|on|off`) is the same for all goals.
 2. The time saved by smart travel order and hop/retract skip is computed and counted as credit.
 3. `enforce_budget` drops the lowest-value slowdowns (time cost against heat or overhang benefit) until the plan fits `time ≤ original × (1 + limit) + credit`.
 4. The G-code is written, and the time is estimated again on the written file with the same estimator that sets M73. If it is still over the limit, more slowdowns are dropped and the file is written again.
-5. Hot layers that were left unfixed to keep the limit are listed in the first recommendation (*Goal*), suggesting AI Balanced / AI Quality or slicer cooling settings.
+5. Hot layers that were left unfixed to keep the limit are listed in the first recommendation (*Goal*), suggesting EmberCheck Balanced / EmberCheck Quality or slicer cooling settings.
 
 `--no-time-limit` turns the limit off (pre-1.3 behaviour).
 

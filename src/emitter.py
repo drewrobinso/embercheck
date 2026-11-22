@@ -321,14 +321,35 @@ def rewrite_m73(orig_g, new_text, kin, progress=None):
     ro, to = rem_list(orig_g); rn, tn = rem_list(ng)
     if len(ro) != len(rn): return new_text, 0
     lines = ng.raw_lines[:]; n = 0
+    # 1) remaining minutes R: the slicer's value scaled by our new/old remaining-time ratio at the same line
+    newR = []
     for (io, remo), (inew, remn) in zip(ro, rn):
         w = parse_words(split_comment(orig_g.lines[io].text)[0][3:])
         if 'R' not in w or remo <= 0: continue
-        R = w['R'] * remn / remo
+        newR.append((inew, w, w['R'] * remn / remo))
+    # 2) percent done P from the new remaining time, against the new total (first R), never going backwards
+    # total = the slicer's total (largest R anywhere, incl. the start G-code) changed by what we saved in the body
+    T_orig = 0.0; startP = 0
+    for ln in orig_g.lines:
+        if ln.text.startswith('M73 P'):
+            w0 = parse_words(split_comment(ln.text)[0][3:])
+            T_orig = max(T_orig, w0.get('R', 0) or 0)
+            if ln.layer < 0 and ln.i < orig_g.body_start: startP = max(startP, int(w0.get('P', 0) or 0))
+    R0 = (T_orig + newR[0][2] - newR[0][1]['R']) if newR else 0.0
+    lastP = startP
+    for inew, w, R in newR:
+        t = lines[inew]; t0 = t
         Rn = int(round(R))
         if Rn != int(w['R']):
-            t = lines[inew]
-            lines[inew] = re.sub(r'(\sR)\d+', lambda m: m.group(1) + str(Rn), t, count=1); n += 1
+            t = re.sub(r'(\sR)\d+', lambda m: m.group(1) + str(Rn), t, count=1)
+        if 'P' in w and R0 > 0:
+            Pn = max(lastP, min(100, int(round(100.0 * (1.0 - R / R0)))))
+            if w['P'] >= 100: Pn = 100
+            lastP = Pn
+            if Pn != int(w['P']):
+                t = re.sub(r'(M73\s+P)\d+', lambda m: m.group(1) + str(Pn), t, count=1)
+        if t != t0:
+            lines[inew] = t; n += 1
     return ''.join(lines), n
 
 

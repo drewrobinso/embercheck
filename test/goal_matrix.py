@@ -34,7 +34,7 @@ VARIANTS = {'full': {}, 'no_accel': {'accel': False}, 'no_reorder': {'reorder': 
 
 
 def run(case, goal, outdir, stress=False, variant='full'):
-    import bambu_optimizer as B
+    import embercheck as B
     from optimizer import Settings
     src = os.path.join(HERE, 'out', case, 'plate_1.gcode')
     text = open(src, encoding='utf-8').read()

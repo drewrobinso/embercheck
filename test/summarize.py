@@ -1,5 +1,5 @@
 import sys, json; sys.path.insert(0, '/workspace/print-optimizer/src')
-from bambu_optimizer import process_text
+from embercheck import process_text
 from optimizer import Settings
 rows = []
 cases = ['tower_pla', 'tower_petg', 'tower_abs', 'tower_asa', 'speaker_petg', 'speaker_asa']

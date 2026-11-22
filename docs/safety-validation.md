@@ -10,6 +10,8 @@ The new G-code is parsed again and compared with the original. Any failure means
 
 ## `test/verify.py` (independent checker)
 `python test/verify.py original.gcode optimized.gcode [--reordered] [--arc-tol 0.012]`
+
+Since 1.4.2 it first removes the EmberCheck stamp block and checks its `body_sha256` with its own code (FAIL on a mismatch); the stamp itself is inserted only after the built-in validator passed, and EmberCheck checks that removing the block gives back exactly the validated text. See [verify.md](verify.md).
 - its own position-tracking parser (relative E), exact `Decimal` E per layer
 - multiset of extrusion moves including Z; arc chains with vertex, midpoint, direction and sweep checks
 - without `--reordered`: line-by-line alignment that only allows removable hop/retract lines, arcs consuming G1 lines, `Z removed from travel`, changed F/S values and inserted `G1 F`/`M106`/`M204`
