@@ -5,6 +5,15 @@ import bambu_presets as bp
 import embercheck as ec
 
 
+def _norm(p):
+    """Compare paths across OS separators (Windows expanduser keeps '/' in the suffix)."""
+    return os.path.normpath(p)
+
+
+def _home():
+    return os.environ.get('USERPROFILE') or os.environ['HOME']
+
+
 def _with_platform(mod, name, fn):
     orig = mod.sys.platform
     try:
@@ -38,17 +47,19 @@ def _with_home(fn):
 def main():
     # Bambu Studio user data dir (expanduser follows HOME)
     def check_bambu():
-        assert bp.bambu_data_dir() == os.path.join(os.environ['HOME'], 'Library', 'Application Support', 'BambuStudio')
+        got, want = _norm(bp.bambu_data_dir()), _norm(os.path.join(_home(), 'Library', 'Application Support', 'BambuStudio'))
+        assert got == want, (got, want)
     (lambda: _with_home(lambda: _with_platform(bp, 'darwin', check_bambu)))()
 
     def check_linux():
-        assert bp.bambu_data_dir() == os.path.join(os.environ['HOME'], '.config', 'BambuStudio')
+        got, want = _norm(bp.bambu_data_dir()), _norm(os.path.join(_home(), '.config', 'BambuStudio'))
+        assert got == want, (got, want)
     (lambda: _with_home(lambda: _with_platform(bp, 'linux', check_linux)))()
 
     def check_win():
         os.environ['APPDATA'] = os.path.join(os.environ['HOME'], 'AppData', 'Roaming')
-        got = bp.bambu_data_dir()
-        assert got == os.path.join(os.environ['APPDATA'], 'BambuStudio'), got
+        got, want = _norm(bp.bambu_data_dir()), _norm(os.path.join(os.environ['APPDATA'], 'BambuStudio'))
+        assert got == want, (got, want)
     (lambda: _with_home(lambda: _with_platform(bp, 'win32', check_win)))()
 
     # System profile search includes the macOS app bundle; a fake bundle is found
@@ -77,18 +88,21 @@ def main():
     def check_mac_data():
         return ec.local_data_dir()
     mac_data, home = _with_home(lambda: _with_platform(ec, 'darwin', check_mac_data))
-    assert mac_data == os.path.join(home, 'Library', 'Application Support', 'EmberCheck'), mac_data
+    got, want = _norm(mac_data), _norm(os.path.join(home, 'Library', 'Application Support', 'EmberCheck'))
+    assert got == want, (got, want)
 
     def check_win_data():
         os.environ['LOCALAPPDATA'] = os.path.join(os.environ['HOME'], 'AppData', 'Local')
         return ec.local_data_dir()
     win, home = _with_home(lambda: _with_platform(ec, 'win32', check_win_data))
-    assert win == os.path.join(home, 'AppData', 'Local', 'EmberCheck'), win
+    got, want = _norm(win), _norm(os.path.join(home, 'AppData', 'Local', 'EmberCheck'))
+    assert got == want, (got, want)
 
     def check_linux_data():
         return ec.local_data_dir()
     linux_data, home = _with_home(lambda: _with_platform(ec, 'linux', check_linux_data))
-    assert linux_data == os.path.join(home, '.local', 'share', 'embercheck'), linux_data
+    got, want = _norm(linux_data), _norm(os.path.join(home, '.local', 'share', 'embercheck'))
+    assert got == want, (got, want)
 
     # gui_available: macOS must not require DISPLAY; Linux without DISPLAY/Wayland is blocked
     old_disp, old_wl = os.environ.pop('DISPLAY', None), os.environ.pop('WAYLAND_DISPLAY', None)
