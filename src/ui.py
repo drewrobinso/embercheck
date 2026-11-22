@@ -219,8 +219,9 @@ class ProgressWindow:
     Returns (result, error, cancelled, window_position)."""
     W, H = 460, 200
 
-    def __init__(self, title_file=''):
+    def __init__(self, title_file='', slicer='Bambu Studio'):
         self.title_file = title_file
+        self.slicer = slicer
 
     def run(self, work):
         import tkinter as tk
@@ -228,7 +229,7 @@ class ProgressWindow:
         self.q = queue.Queue(); self.cancel = threading.Event(); self.out = {}
         root = self.root = tk.Tk()
         set_app_icon(root)
-        root.title('EmberCheck \u00b7 Print Optimizer for Bambu Studio'); root.configure(bg=BG); root.resizable(False, False)
+        root.title('EmberCheck \u00b7 Print Optimizer for %s' % self.slicer); root.configure(bg=BG); root.resizable(False, False)
         root.withdraw()
         root.attributes('-topmost', True)
         px, self.scale = _setup_scaling(root)
@@ -393,7 +394,7 @@ def show_summary(path, auto_close=60, pos=None):
     _dpi_aware()
     with open(path, encoding='utf-8') as f:
         d = json.load(f)
-    root = tk.Tk(); root.title('EmberCheck \u00b7 Print Optimizer for Bambu Studio'); root.configure(bg=BG); root.resizable(False, False)
+    root = tk.Tk(); root.title('EmberCheck \u00b7 Print Optimizer for %s' % (d.get('slicer') or 'Bambu Studio')); root.configure(bg=BG); root.resizable(False, False)
     set_app_icon(root)
     root.withdraw()
     px, scale = _setup_scaling(root)

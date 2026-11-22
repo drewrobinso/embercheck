@@ -141,7 +141,14 @@ def recommendations(opt, summary):
             goal.capitalize(), 'at or below the original' if goal == 'speed' else 'within +2%', left,
             _layer_list([i + 1 for i, e in enumerate(opt.opt) if e.Tmax is not None and e.Tmax > opt.mat['t_high']]),
             'EmberCheck Balanced or EmberCheck Quality' if goal == 'speed' else 'EmberCheck Quality')))
-    if hot:
+    prusa = getattr(g, 'dialect', None) is not None and g.dialect.name == 'prusaslicer'
+    if hot and prusa:
+        need = summary.get('hot_layer_time_needed')
+        recs.append(('Cooling / min layer time', 'PrusaSlicer &rsaquo; Filament Settings &rsaquo; Cooling: <b>Slow down if layer print time is below</b> (slowdown_below_layer_time) is %gs. %d layers are predicted too hot. Raising it%s, printing 2+ copies at once, or adding a sacrificial "cooling tower" next to small parts fixes this at the source.' % (
+            c('slow_down_layer_time', 0), hot, (' to ~%ds' % need) if need else '')))
+        if mat in ('PLA', 'PETG', 'TPU') and opt.fan_max_cfg < 80:
+            recs.append(('Fan', 'Max fan speed (max_fan_speed) is %g%%. For %s small/hot features, 80-100%% (PLA) or 60-70%% (PETG) helps.' % (opt.fan_max_cfg, mat)))
+    elif hot:
         need = summary.get('hot_layer_time_needed')
         recs.append(('Cooling / min layer time', 'Bambu Studio &rsaquo; Filament &rsaquo; Cooling: <b>Slow printing down for better layer cooling</b> (slow_down_layer_time) is %gs. %d layers are predicted too hot. Raising it%s, printing 2+ copies at once, or adding a sacrificial "cooling tower" next to small parts fixes this at the source.' % (
             c('slow_down_layer_time', 0), hot, (' to ~%ds' % need) if need else '')))
@@ -151,20 +158,28 @@ def recommendations(opt, summary):
         recs.append(('Chamber / cold layers', '%d layers are predicted too cold for %s (weak bonding / warping risk on big layers). Close the door/lid and pre-heat the chamber%s; lower <b>Min fan speed</b> (fan_min_speed, now %g%%) and consider raising <b>fan_cooling_layer_time</b> threshold carefully.' % (
             cold, mat, ' (set Filament &rsaquo; Chamber temperature if your printer heats the chamber)' if c('support_chamber_temp_control', 0) else '', opt.fan_min_cfg)))
     tr = opt.travel
-    if tr['moves'] and tr['open_air'] > 0.1 * tr['moves'] and not c('reduce_crossing_wall', 0):
+    if prusa and tr['moves'] and tr['open_air'] > 0.1 * tr['moves'] and not c('avoid_crossing_perimeters', 0):
+        recs.append(('Stringing / travel', '%d of %d travels (%.0f mm total) cross open air. Enable <b>Avoid crossing perimeters</b> (Print Settings &rsaquo; Layers and perimeters &rsaquo; Advanced; avoid_crossing_perimeters) so travels stay inside the part, which this post-processor cannot safely re-route.' % (tr['open_air'], tr['moves'], tr['open_air_len'])))
+    elif not prusa and tr['moves'] and tr['open_air'] > 0.1 * tr['moves'] and not c('reduce_crossing_wall', 0):
         recs.append(('Stringing / travel', '%d of %d travels (%.0f mm total) cross open air. Enable <b>Avoid crossing wall</b> (Process &rsaquo; Others; reduce_crossing_wall) so travels stay inside the part, which this post-processor cannot safely re-route.' % (tr['open_air'], tr['moves'], tr['open_air_len'])))
-    if tr['open_air_unretracted']:
+    if tr['open_air_unretracted'] and prusa:
+        recs.append(('Retraction', '%d open-air travels happen without retraction. Check Printer Settings &rsaquo; Extruder 1 &rsaquo; Retraction (length %g mm, "Minimum travel after retraction" %g mm) and "Retract on layer change"/Wipe. Use --fix-strings to add retractions here.' % (tr['open_air_unretracted'], opt.ret_len, c('retract_before_travel', 0))))
+    elif tr['open_air_unretracted']:
         recs.append(('Retraction', '%d open-air travels happen without retraction. Check Filament &rsaquo; Setting overrides &rsaquo; Retraction (length %g mm) and that "Retract when changing layer"/wipe are on. Use --fix-strings to add retractions here.' % (tr['open_air_unretracted'], opt.ret_len)))
     if tr['inside_lifted'] > 50 and c('z_hop', 0) > 0:
         recs.append(('Z-hop', '%d travels that stay fully inside the part still retract + z-hop (%g mm, %s). If the top surfaces look fine, set <b>Z-hop type</b> to Slope/Spiral and "Z-hop when retracting" only above top surfaces, or reduce z_hop to 0.2-0.4 mm to save time.' % (tr['inside_lifted'], c('z_hop', 0), g.config.get('z_hop_types', '?'))))
     ov = getattr(opt, 'ov_stats', None)
-    if ov and (ov['b3'] + ov['b4']) > 0:
+    if ov and (ov['b3'] + ov['b4']) > 0 and prusa:
+        recs.append(('Overhangs', '%d wall segments are >50%% unsupported. Keep <b>Detect bridging perimeters</b> and <b>Enable dynamic overhang speeds</b> on (Print Settings &rsaquo; Speed; currently %s/%s); consider supports or a 45&deg; chamfer for these areas.' % (ov['b3'] + ov['b4'], int(c('overhangs', 0)), int(c('enable_dynamic_overhang_speeds', 0)))))
+    elif ov and (ov['b3'] + ov['b4']) > 0:
         recs.append(('Overhangs', '%d wall segments are >50%% unsupported but not marked as overhangs by the slicer. Keep <b>Detect overhang wall</b> and <b>Slow down for overhang</b> on (currently %s/%s); consider supports or a 45&deg; chamfer for these areas.' % (ov['b3'] + ov['b4'], int(c('detect_overhang_wall', 0)), int(c('enable_overhang_speed', 0)))))
     if ov and ov['bridge_low_fan']:
-        recs.append(('Bridges', '%d bridge segments print with less than the overhang fan speed. Raise Filament &rsaquo; Cooling &rsaquo; <b>Overhang/bridge fan</b> (overhang_fan_speed, now %g%%).' % (ov['bridge_low_fan'], opt.ov_fan_cfg)))
+        recs.append(('Bridges', ('%d bridge segments print with less than the bridge fan speed. Raise Filament Settings &rsaquo; Cooling &rsaquo; <b>Bridges fan speed</b> (bridge_fan_speed, now %g%%).' if prusa else
+                                 '%d bridge segments print with less than the overhang fan speed. Raise Filament &rsaquo; Cooling &rsaquo; <b>Overhang/bridge fan</b> (overhang_fan_speed, now %g%%).') % (ov['bridge_low_fan'], opt.ov_fan_cfg)))
     fl = summary.get('flow_limited_share', 0)
     if fl > 0.25:
-        recs.append(('Flow limit', '%.0f%% of extrusion time is already at the filament max volumetric speed (%g mm&sup3;/s), so faster motion cannot help there. A High-Flow hotend (the H2S profile lists Direct Drive High Flow variants) with a matching filament profile is the only way to go faster.' % (fl * 100, opt.max_vol)))
+        recs.append(('Flow limit', ('%.0f%% of extrusion time is already at the filament max volumetric speed (%g mm&sup3;/s), so faster motion cannot help there. A high-flow hotend with a matching filament profile is the only way to go faster.' if prusa else
+                                    '%.0f%% of extrusion time is already at the filament max volumetric speed (%g mm&sup3;/s), so faster motion cannot help there. A High-Flow hotend (the H2S profile lists Direct Drive High Flow variants) with a matching filament profile is the only way to go faster.') % (fl * 100, opt.max_vol)))
     acc = summary.get('accel_share', 0)
     if acc > 0.25:
         recs.append(('Short segments', '%.0f%% of extrusion time is acceleration-limited (many short moves). Larger infill pattern spacing, Gyroid/"Cross hatch" sparse infill, or fewer walls on tiny features give more real speed than higher mm/s settings.' % (acc * 100)))
@@ -189,7 +204,8 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
     base, new = opt.base, opt.opt
     nl = opt.nl
     o = ['<!doctype html><html><head><meta charset="utf-8"><title>EmberCheck report - %s</title><style>%s</style></head><body>' % (html.escape(src_name), CSS)]
-    o.append('<h1>EmberCheck report <small style="font-weight:normal">print optimizer for Bambu Studio</small></h1><p><b>%s</b><br><small>%s &middot; generated %s &middot; %s</small></p>' % (
+    slicer = getattr(getattr(opt.g, 'dialect', None), 'slicer', 'Bambu Studio')
+    o.append('<h1>EmberCheck report <small style="font-weight:normal">print optimizer for ' + slicer + '</small></h1><p><b>%s</b><br><small>%s &middot; generated %s &middot; %s</small></p>' % (
         html.escape(src_name), html.escape(opt.g.config.get('printer_model', 'unknown printer')), datetime.datetime.now().strftime('%Y-%m-%d %H:%M'), html.escape(settings_desc)))
     if validation['errors']:
         o.append('<p class="bad"><b>Optimised G-code was NOT written</b> - safety check failed: %s. Your file is unchanged.</p>' % html.escape('; '.join(validation['errors'])))
@@ -229,7 +245,7 @@ def build(opt, summary, validation, applied, src_name, settings_desc):
                      ('Hot layers', '%d &rarr; %d' % (k['hot_before'], k['hot_after'])),
                      ('Cold layers', '%d &rarr; %d%s' % (k['cold_before'], k['cold_after'], '' if opt.mat['cold_matters'] else ' (info)'))]:
         o.append('<div>%s<b>%s</b></div>' % (lab, val))
-    o.append('</div><p><small>Temperatures are from a simplified, uncalibrated thermal model (not a physics simulation) - use them to compare layers and before/after, not as measured values. Raw print times use Bambu Studio&#39;s own estimate from the G-code header, scaled by EmberCheck&#39;s motion model (the same model before and after); the printer may differ by a few %.</small></p>')
+    o.append('</div><p><small>Temperatures are from a simplified, uncalibrated thermal model (not a physics simulation) - use them to compare layers and before/after, not as measured values. Raw print times use ' + (slicer + '&#39;s own estimate from the G-code ' + ('footer' if slicer == 'PrusaSlicer' else 'header')) + ', scaled by EmberCheck&#39;s motion model (the same model before and after); the printer may differ by a few %.</small></p>')
     xs = list(range(1, nl + 1))
     o.append('<h2>Predicted interlayer temperature</h2>')
     o.append(line_chart([

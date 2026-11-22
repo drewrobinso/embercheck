@@ -1,10 +1,10 @@
 <p align="center"><img src="branding/png/embercheck_128.png" width="96" height="96" alt="EmberCheck icon"></p>
 
-# EmberCheck — Print Optimizer for Bambu Studio
+# EmberCheck — Print Optimizer for Bambu Studio and PrusaSlicer
 
 *Formerly "Bambu Print Optimizer" (1.x, up to 1.4.0). Installing EmberCheck upgrades it in place.*
 
-Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer. Windows installer, no Python needed.
+Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer, and since 1.5.0 for **PrusaSlicer G-code on Marlin printers** such as the **Creality Ender-3 V2 Neo** (see [docs/prusaslicer.md](docs/prusaslicer.md)). Windows installer, no Python needed.
 
 Repository: https://github.com/drewrobinso/embercheck
 
@@ -14,7 +14,7 @@ What changed in each version: [CHANGELOG.md](CHANGELOG.md). How each optimizatio
 
 **Code signing policy:** see [below](#code-signing-policy).
 
-A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your PC with no cloud upload:
+A Python tool that checks a sliced Bambu Studio or PrusaSlicer print and tweaks it, all on your PC with no cloud upload:
 
 1. **Thermal check ("Assess"-like).** It estimates how hot each island of each layer is when the next layer goes on top. It flags layers that are too hot (sagging, curling, blobby small parts) or too cold (weak layer bonding, warping on ABS/ASA). You get a heat map and charts in an HTML report.
 2. **Speed/fan changes ("Enhance"-like).**
@@ -31,7 +31,7 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
    - Smart travel order: infill islands within one feature are re-ordered (nearest neighbour + 2-opt) to shorten travel. Walls are never re-ordered ([docs/travel-order.md](docs/travel-order.md)).
    - Z-hop / retraction skip on short infill travels that stay over printed area (Speed: hop + retract, Balanced: hop only, Quality: off) ([docs/hop-retract-skip.md](docs/hop-retract-skip.md)).
    - ArcWelder-style arc fitting (G2/G3) with the exact same E, on printers without Bambu's curve planning ([docs/arc-fitting.md](docs/arc-fitting.md)).
-6. **Slicer-setting tips.** The report lists Bambu Studio settings worth changing for problems that are better fixed in the slicer.
+6. **Slicer-setting tips.** The report lists Bambu Studio (or PrusaSlicer) settings worth changing for problems that are better fixed in the slicer.
 
 **Rules it always follows:**
 - It changes feedrates (F), part-fan values (M106 S), accelerations (M204) and M73 remaining-time values, and can insert `M106`, `G1 F` and `M204` lines (plus net-zero retract/unretract pairs with `--fix-strings`).
@@ -53,7 +53,7 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 > Privacy: EmberCheck collects and sends no data ([PRIVACY.md](PRIVACY.md)). Code signing: [CODE_SIGNING.md](CODE_SIGNING.md). SignPath Foundation signing is pending, so current releases are unsigned.
 
 1. Download `EmberCheck-Setup-<version>.exe` from the [Releases](https://github.com/drewrobinso/embercheck/releases) page.
-2. Close Bambu Studio, then run the installer: **Next** on the options page, pick your printers on the **printers page**, then **Finish**.
+2. Close Bambu Studio (and PrusaSlicer), then run the installer: **Next** on the options page, pick your printers on the **printers page**, then **Finish**.
    - It installs for your Windows user only, with no admin rights, to `%LOCALAPPDATA%\Programs\EmberCheck`.
    - Python, shapely and numpy are bundled. You don't need to install anything else.
    - Option *Add EmberCheck process presets to Bambu Studio* (on by default). After the files are copied, a **printer page** lists every Bambu Lab model in Bambu Studio's own system profiles (`BBL.json`, so new models appear without an EmberCheck update: X1 Carbon, X1, X1E, P1P, P1S, P2S, A1 mini, A1, A2L, H2D, H2D Pro, H2S, H2C, X2D, H3C in 02.09). The printers you set up in Bambu Studio (`BambuStudio.conf` and your user printer presets) are pre-checked.
@@ -68,7 +68,8 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
      - **Upgrading from Bambu Print Optimizer 1.x:** EmberCheck uses the same installer AppId, so it upgrades in place: the old `%LOCALAPPDATA%\Programs\PrintOptimizer` folder and the old *Print Optimizer* Start menu folder are removed, and its preset backups, preset manifest and preset log are moved to `%LOCALAPPDATA%\Programs\EmberCheck`. The old `... AI <Goal>` (1.2–1.4.0) and `... - Optimized` (1.0/1.1) presets are backed up to `%LOCALAPPDATA%\Programs\EmberCheck\preset_backups\`, then retired; tweaks you made to an `AI` preset are carried over to the `EmberCheck` preset of the same printer, layer and goal. Your own presets whose post-processing line calls `PrintOptimizer.exe` are pointed at `EmberCheck.exe` (arguments kept), even if you untick the presets option.
        - If preset sync is off, which is Bambu Studio's default, or the old preset isn't synced, it is deleted.
        - If it is synced to your Bambu account (Bambu Studio's *Sync user presets* setting is on, `app.sync_user_preset` in `BambuStudio.conf`), its post-processing line is cleared and a note is added. Bambu Studio can delete a cloud preset only through its own Delete command; a cloud preset deleted on disk is downloaded again at the next sync. **Delete it in Bambu Studio** (select it → Delete).
-   - Start menu (folder **EmberCheck**): **EmberCheck** (pick a sliced `.gcode.3mf` and optimize it by hand), **Add Bambu Studio presets** (re-opens the printer selection; use it after adding a printer in Bambu Studio), and **EmberCheck reports** (opens the reports folder).
+   - Option *Add EmberCheck print presets to PrusaSlicer* (shown and on by default when PrusaSlicer is found in `%APPDATA%\PrusaSlicer`). It creates `<your print profile> - EmberCheck Balanced / Speed / Quality` in `%APPDATA%\PrusaSlicer\print\`, based on the print profile selected in PrusaSlicer, e.g. `0.20 mm NORMAL (0.4 mm nozzle) @CREALITY - EmberCheck Balanced` for the Ender-3 V2 Neo. The Bambu Studio option is only shown when Bambu Studio is installed (or PrusaSlicer is not). Details: [docs/prusaslicer.md](docs/prusaslicer.md).
+   - Start menu (folder **EmberCheck**): **EmberCheck** (pick a sliced `.gcode.3mf` and optimize it by hand), **Add Bambu Studio presets** (re-opens the printer selection; use it after adding a printer in Bambu Studio), **Add PrusaSlicer presets** (only when PrusaSlicer is installed: makes the three presets for the print profile now selected in PrusaSlicer), and **EmberCheck reports** (opens the reports folder).
    - The finish page says what happened: how many presets were added for which printers, or that no Bambu Lab printer was selected or found. Printers are detected from `BambuStudio.conf` (`presets.machine`, `models`) and from your user printer presets; EmberCheck never logs the conf's contents (it also holds printer access codes).
 3. Start Bambu Studio, pick an EmberCheck preset such as `0.20mm H2S EmberCheck Balanced`, and slice as usual. When the results card appears, click **Continue to Print** and print, send or export from Bambu Studio as usual: it uses the optimized file (see [docs/verify.md](docs/verify.md)).
 
@@ -77,12 +78,13 @@ A Python tool that checks a sliced Bambu Studio print and tweaks it, all on your
 - **Smart App Control** (Windows 11, Settings → Privacy & security → Windows Security → App & browser control) blocks unsigned apps outright and has no *Run anyway* button. Unsigned test builds (anything from `scripts/build_wine.sh` or a local build) won't run while it is **On**; use a signed release. We don't recommend turning Smart App Control off just for this tool. On older Windows 11 builds that can't be undone without resetting Windows; recent updates let you turn it back on in the same settings page, per Microsoft's [Smart App Control FAQ](https://support.microsoft.com/en-us/windows/security/threat-malware-protection/smart-app-control-frequently-asked-questions).
 - Never install the throw-away self-signed test builds from `dist/test-signed/`; they exist only to check the signing pipeline.
 
-**Uninstall:** Windows Settings → Apps → *EmberCheck - Print Optimizer for Bambu Studio* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
+**Uninstall:** Windows Settings → Apps → *EmberCheck - Print Optimizer for Bambu Studio and PrusaSlicer* → Uninstall (or the Start menu entry). This removes the program and the shortcuts, and cleans up the same user folders.
 - The `... EmberCheck <Goal>` presets (and any old `... AI <Goal>` / `... - Optimized` ones) that belong to this tool are deleted.
 - Presets that are synced to your Bambu cloud account (only when preset sync is on) are kept, but their post-processing line is cleared. Deleting them locally would make Bambu Studio download the cloud copy again, still pointing at the removed exe, and slicing would fail. Delete them in Bambu Studio if you don't want them.
+- The PrusaSlicer presets EmberCheck created are deleted (only those; if you changed one, a copy goes to `preset_backups\prusaslicer\` first). Your own PrusaSlicer presets and settings are not touched.
 - Your reports in `Documents\EmberCheck`, the receipt log `%LOCALAPPDATA%\EmberCheck\runs.log` and the preset backups are kept.
 
-**Silent install** (for scripting): `EmberCheck-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Presets are made for the printers set up in Bambu Studio (plus those chosen last time); `/PRINTERS="X1C;P1S;A1 mini"` picks printers explicitly (short names as in the preset names, or full names such as `Bambu Lab X1 Carbon`). Add `/TASKS="startmenu"` to skip the presets.
+**Silent install** (for scripting): `EmberCheck-Setup-<version>.exe /VERYSILENT /SUPPRESSMSGBOXES`. Presets are made for the printers set up in Bambu Studio (plus those chosen last time); `/PRINTERS="X1C;P1S;A1 mini"` picks printers explicitly (short names as in the preset names, or full names such as `Bambu Lab X1 Carbon`). Add `/TASKS="startmenu"` to skip the presets. PrusaSlicer: `/TASKS="prusapresets,startmenu"`, and optionally `/PRUSABASE="0.20 mm NORMAL (0.4 mm nozzle) @CREALITY"` (several separated by `;`) instead of the profile selected in PrusaSlicer.
 
 ## What you see when you slice
 
@@ -123,6 +125,14 @@ These points were checked in the Bambu Studio source and the 02.09.01.70 binary.
 - EmberCheck adds a comment block (`; EMBERCHECK_BLOCK_START` … `; EMBERCHECK_BLOCK_END`) after Bambu's header block with what it did and a SHA-256 of the rest of the file. Check any file with `EmberCheck.exe --check-stamp plate.gcode.3mf` (see [docs/verify.md](docs/verify.md)).
 - Exit code: it always exits 0 (also on Cancel or an internal error, which leaves the G-code untouched) unless you add `--strict`.
 - The presets can be edited like any other preset. For example, add `--fix-strings` or `--arcs off` to the post-processing line.
+
+## PrusaSlicer (Creality Ender-3 V2 Neo and other Marlin printers)
+
+New in 1.5.0, full page: [docs/prusaslicer.md](docs/prusaslicer.md).
+- Pick an `... - EmberCheck <Goal>` print preset in PrusaSlicer and **export** the G-code (or send it / export to SD). PrusaSlicer runs post-processing on export, so its preview shows the toolpath before EmberCheck; the exported file is the optimized one. The card's button is *Close*.
+- Reads PrusaSlicer's own markers (`;TYPE:`, `;LAYER_CHANGE`, `;WIDTH:`, `;WIPE_START/END`) and its config block at the end of the file; writes `M204 P` on Marlin 2 (`M204 S` on Marlin legacy and Klipper). Start/end G-code, `;TYPE:Custom` blocks (layer-change, colour-change), `M600`, `M486`, `T<n>` and similar are never changed.
+- Same goal rules as for Bambu Studio. On a real Ender-3 V2 Neo slice (500 layers, PrusaSlicer estimate 11h 59m 55s): Speed 9h 56m (−17.2%), Balanced 10h 48m (−10.1%), Quality 12h 04m (+0.5%); every output passes the validator and `verify.py`. On this printer acceleration is already at its 500 mm/s² limit and the fan is at 100%, so the time comes from faster inner walls and infill.
+- Not supported: binary G-code, absolute E, firmware retraction, spiral vase, non-Marlin/Klipper flavours (the file is left unchanged and the card says why).
 
 ## Without the installer (Python version)
 
@@ -180,6 +190,8 @@ Arc fitting (`--arcs auto`) is the same for all goals. The time limit is checked
 | `--install-presets` / `--remove-presets` | Create / remove the `... EmberCheck <Goal>` Bambu Studio presets. `--pp-args "..."` adds extra arguments to their post-processing line, after their own `--goal`. |
 | `--printers "X1C;P1S;A1 mini"` | With `--install-presets`: the printers to make presets for (short or full names). Default: the printers set up in Bambu Studio plus those chosen last time. |
 | `--select` | With `--install-presets`: show the printer selection window (the Start menu entry uses this). |
+| `--install-prusa-presets` / `--remove-prusa-presets` | Create / remove the `<print profile> - EmberCheck <Goal>` PrusaSlicer print presets (default: for the print profile selected in PrusaSlicer). `--pp-args` works here too. |
+| `--prusa-base "A;B"` | With `--install-prusa-presets`: the PrusaSlicer print profiles to base the presets on (system or user presets, names as shown in PrusaSlicer). |
 | `--check-stamp FILE` | Check the EmberCheck stamp of an optimized `.gcode` or `.gcode.3mf`: exit 0 and *Stamp OK* if the G-code is exactly what EmberCheck wrote. See [docs/verify.md](docs/verify.md). |
 | `--open-reports` | Open the reports folder. |
 
@@ -230,6 +242,7 @@ This program will not transfer any information to other networked systems unless
   - reports and logs in `Documents\EmberCheck`, and the receipt log `%LOCALAPPDATA%\EmberCheck\runs.log`
   - its own install folder
   - with the preset option, the preset files in `%APPDATA%\BambuStudio\user\<id>\process`
+  - with the PrusaSlicer preset option, the preset files in `%APPDATA%\PrusaSlicer\print` (it reads `PrusaSlicer.ini` and the vendor profiles only to find the selected print profile)
 - If you are signed in to Bambu Studio, Bambu Studio may sync those user presets to your Bambu cloud account, as it does with any user preset. That is Bambu Studio's behaviour, under Bambu Lab's privacy policy.
 
 ## Code signing policy
@@ -284,7 +297,8 @@ SignPath one-time setup:
 - `src/bambu_optimizer.py`: compatibility shim for 1.x post-processing lines
 - `src/ui.py`, `src/progress.py`: progress window and results card (tkinter), staged progress reporting with cancel
 - `src/bambu_presets.py`: printer models from `BBL.json`, creates, migrates (AI / Optimized → EmberCheck, PrintOptimizer.exe → EmberCheck.exe) and removes the Bambu Studio `... EmberCheck <Goal>` presets
-- `src/gcode_model.py`: G-code parser, protected-block detection, motion-time estimator
+- `src/prusa_presets.py`: creates, updates and removes the PrusaSlicer `... - EmberCheck <Goal>` print presets (flattens the vendor profile's `inherits` chain)
+- `src/gcode_model.py`: G-code parser with slicer dialects (Bambu Studio, PrusaSlicer), protected-block detection, motion-time estimator
 - `src/optimizer.py`: geometry (islands, overhangs), thermal model, speed/fan plan, travel/stringing, island re-ordering
 - `src/emitter.py`: writes the new G-code, updates M73, runs the safety validation
 - `src/report.py`: HTML report with inline SVG charts and heat maps (works offline)
@@ -292,6 +306,7 @@ SignPath one-time setup:
 - `src/project_info.py`: project links (Buy Me a Coffee page, repository URL)
 - `test/verify.py`: an independent checker: `python verify.py original.gcode optimized.gcode [--reordered] [--arc-tol 0.012]`. It tracks the head position itself, checks the exact decimal E per layer, the multiset of extrusion moves (with Z), expands arcs back to the original segments (vertex, midpoint, direction and sweep), and without `--reordered` also aligns the files line by line, allowing only removable hop/retract lines, arcs and changed F/S values.
 - `test/goal_matrix.py`: the goal rules and per-feature time table on the six reference prints
+- `test/prusa_matrix.py`: the goal rules on PrusaSlicer / Ender-3 V2 Neo slices (`test/fixtures/prusa/`, made with `make_fixtures.sh`, plus `test/out/prusa/ender3v2neo_sample.gcode` when present); `test/test_prusa_presets.py`: the PrusaSlicer preset logic
 - `test/ui_shots.py`: renders the windows at 100/125/150/200% scaling and checks that every button is visible
 - `docs/`: one page per optimization
 - `branding/`: the icon (SVG source, PNGs, the three concepts and `make_icons.py`)
@@ -300,6 +315,12 @@ SignPath one-time setup:
 - `scripts/`: build scripts (Windows / Wine), portable zip, local test signing
 
 ## Test results (box, 2026-11-21)
+
+1.5.0 (`EmberCheck-Setup-1.5.0.exe`, unsigned build, Wine 10; not yet run on Windows or on a real print):
+- PrusaSlicer, Creality Ender-3 V2 Neo real slice (PrusaSlicer 2.9.7, 500 layers, PLA, PrusaSlicer estimate 11h 59m 55s): Speed **9h 56m 24s (−17.2%)**, Balanced **10h 47m 30s (−10.1%)**, Quality **12h 03m 46s (+0.5%)**; validator OK, `verify.py` PASS (also strict line alignment without travel re-order), total E unchanged.
+- `test/prusa_matrix.py`: 36 runs (5 PrusaSlicer fixtures + the sample × 3 goals × full / no re-order) all PASS; `test/test_prusa_presets.py` PASS.
+- End to end under Wine: silent install into a prefix with the Ender's PrusaSlicer configuration created the three `0.20 mm NORMAL (0.4 mm nozzle) @CREALITY - EmberCheck <Goal>` presets; PrusaSlicer 2.9.7 (CLI) slicing with the Balanced preset ran the installed `EmberCheck.exe` as its post-processing script, the exported file carries a valid stamp and passes `verify.py`, and the preset reproduced the system profile's settings exactly (the config block differs only in `notes`, `inherits`, `post_process`, `print_settings_id` and `compatible_printers_condition`). Uninstall removed only those three presets.
+- Bambu Studio: the 1.5.0 G-code is byte-identical to 1.4.2 (stamp excluded) on 54 runs (6 prints × 3 goals × full / no accel / no reorder + arcs); `test/goal_matrix.py` all PASS with unchanged times; `test/test_presets.py` ALL PASS; `test/wine_upgrade.py` 1.4.0 → 1.5.0 PASS.
 
 1.4.2 (`EmberCheck-Setup-1.4.2.exe`, unsigned build, Wine 10; also installed and run on the maintainer's Windows PC):
 - `test/goal_matrix.py`: all goal rules PASS on the six prints (times unchanged from 1.4.0); every output passes `verify.py`, including the independent stamp hash check.

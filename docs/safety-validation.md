@@ -19,8 +19,12 @@ Since 1.4.2 it first removes the EmberCheck stamp block and checks its `body_sha
 ## `test/goal_matrix.py`
 6 prints × 3 goals × 5 variants (full, no accel, no reorder, no hop skip, no reorder + arcs on) + 3 stress runs. Checks the goal rules, validity of every variant, the acceleration at every marker, and writes the per-feature time table (`test/results/goal_matrix.md`).
 
+## `test/prusa_matrix.py` (PrusaSlicer, 1.5.0)
+PrusaSlicer 2.9.7 slices for the Creality Ender-3 V2 Neo (`test/fixtures/prusa/`: PLA, PETG, M73 + Z-hop, arc fitting, Marlin legacy) plus the real sample when present, × 3 goals × 2 variants (full, no reorder). Checks: validator OK, `verify.py` PASS (strict line alignment without re-order; arc wipes count as removable wipe moves), still read as PrusaSlicer, `M204 P` on Marlin 2 / `M204 S` on Marlin legacy, no Bambu-only lines added, stamp on line 2 with a matching hash, M73 count unchanged and never increasing, goal limits and goal order. For PrusaSlicer the protected parts are the start/end G-code, every `;TYPE:Custom` block and `M600`/`M601`/`M0`/`M1`/`M25`/`M486`/`M117`/`M118`/`M240`/`M701`/`M702`/`T<n>`; `G10`/`G11` (firmware retraction) is refused.
+
 ## Other tests
 - 12-case regression (each print, default and `--goal speed --fix-strings --arcs on`) with `verify.py`
 - `test/test_presets.py`: preset creation/migration/removal, `BambuStudio.conf` with MD5 trailer (synthetic fixture)
+- `test/test_prusa_presets.py`: PrusaSlicer presets: `inherits` flattening, C-style escaping of the post-processing line, user-preset bases, never overwriting foreign presets, repointing edited presets, uninstall with backup
 - `test/ui_shots.py`: all windows at 100/125/150/200% scaling, every button fully visible
 - frozen exe `--self-test`, frozen exe run under Wine + `verify.py`, installer install/upgrade/uninstall smoke test under Wine

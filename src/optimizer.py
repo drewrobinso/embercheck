@@ -628,12 +628,14 @@ class Optimizer:
             d = self.L[k]; lines = d['lines']; a = d['a']
             order = list(range(a, d['b']))
             changed = False
+            D = self.g.dialect
+            keep_wipe_end = D.name == 'prusaslicer'
             # split into barrier-free regions
             regions = []; cur = []
             for ln in lines:
-                ok = (ln.opt or (ln.in_wipe and not ln.prot and ln.layer >= 0) or (ln.text.startswith('; WIPE_') and not ln.prot)) and ln.feature in FEATURES_REORDER and ln.i not in self.inserts_before and (
+                ok = (ln.opt or (ln.in_wipe and not ln.prot and ln.layer >= 0) or (ln.text.startswith(D.wipe_prefix) and not ln.prot)) and ln.feature in FEATURES_REORDER and ln.i not in self.inserts_before and (
                     ln.kind in ('motion', 'accel') or ln.cmd == 'G17' or
-                    (ln.kind == 'other' and not ln.cmd and any(x in ln.text for x in ('LINE_WIDTH', 'WIPE_START', 'WIPE_END'))))
+                    (ln.kind == 'other' and not ln.cmd and any(x in ln.text for x in (D.width_key.rstrip(':'), 'WIPE_START', 'WIPE_END'))))
                 if ok and cur and lines[cur[-1] - a].feature != ln.feature: ok_split = True
                 else: ok_split = False
                 if ok and not ok_split:
@@ -648,7 +650,8 @@ class Optimizer:
                 for p, i in enumerate(reg):
                     if G[i].is_travel:
                         q = p - 1
-                        while q >= 0 and G[reg[q]].e is None: q -= 1
+                        # PrusaSlicer travels straight after ';WIPE_END': the marker closes the wipe and stays with it
+                        while q >= 0 and G[reg[q]].e is None and not (keep_wipe_end and G[reg[q]].text.startswith(D.wipe_end)): q -= 1
                         bnd = q + 1
                         if not bounds or bounds[-1] < bnd: bounds.append(bnd)
                 if not bounds: continue
@@ -772,12 +775,15 @@ class Optimizer:
         E1, E2 = G[grp[0]], G[grp[-1]]
         if not (E1.opt and E2.opt and E1.feature in HOP_FEATURES and E2.feature == E1.feature): return
         wipes, rets, lifts, lowers, derets, trav = [], [], [], [], [], []
+        f_only_ok = self.g.dialect.f_only_in_wipe
         for i in grp[1:-1]:
             ln = G[i]
             if ln.prot or ln.i in self.inserts_before: return
             if ln.kind == 'motion':
                 xy = ln.x is not None and math.hypot(ln.x - ln.x0, ln.y - ln.y0) > 1e-9
                 if ln.in_wipe:
+                    if f_only_ok and not xy and ln.e is None and ln.w is not None and set(ln.w.keys()) <= {'F'}:
+                        continue        # PrusaSlicer: "G1 F<wipe speed>" opens every wipe; it stays (sets no position)
                     if not (ln.is_wipe or (ln.e is None and xy)): return
                     wipes.append(ln)
                 elif ln.is_travel:

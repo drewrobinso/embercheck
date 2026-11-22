@@ -1,7 +1,9 @@
 ; Inno Setup 6 script - per-user install of EmberCheck (formerly Bambu Print Optimizer 1.x; no admin rights needed).
-; Build:  ISCC.exe /DAppVersion=1.4.2 /DDistDir=..\dist\EmberCheck /DOutDir=..\dist packaging\installer.iss
-; Silent: EmberCheck-Setup-x.y.z.exe /VERYSILENT [/PRINTERS="X1C;P1S;A1 mini"] [/TASKS="presets,startmenu"]
-;         without /PRINTERS the presets are made for the printers set up in Bambu Studio (plus those chosen last time).
+; Build:  ISCC.exe /DAppVersion=1.5.0 /DDistDir=..\dist\EmberCheck /DOutDir=..\dist packaging\installer.iss
+; Silent: EmberCheck-Setup-x.y.z.exe /VERYSILENT [/PRINTERS="X1C;P1S;A1 mini"] [/TASKS="presets,prusapresets,startmenu"]
+;         [/PRUSABASE="0.20 mm NORMAL (0.4 mm nozzle) @CREALITY"]
+;         without /PRINTERS the presets are made for the printers set up in Bambu Studio (plus those chosen last time);
+;         without /PRUSABASE the PrusaSlicer presets are based on the print profile selected in PrusaSlicer.
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
@@ -47,7 +49,7 @@ OutputDir={#OutDir}
 OutputBaseFilename=EmberCheck-Setup-{#AppVersion}
 SetupIconFile=icon.ico
 UninstallDisplayIcon={app}\{#AppExe}
-UninstallDisplayName={#AppName} - Print Optimizer for Bambu Studio
+UninstallDisplayName={#AppName} - Print Optimizer for Bambu Studio and PrusaSlicer
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
@@ -56,20 +58,23 @@ CloseApplications=no
 ; ProductName / ProductVersion above are enforced by the SignPath artifact configuration.
 
 [Tasks]
-Name: "presets"; Description: "Add EmberCheck process presets to Bambu Studio, e.g. ""0.20mm H2S EmberCheck Balanced"" (recommended; you pick your printers after the files are copied)"
+Name: "presets"; Description: "Add EmberCheck process presets to Bambu Studio, e.g. ""0.20mm H2S EmberCheck Balanced"" (recommended; you pick your printers after the files are copied)"; Check: BambuFound or not PrusaFound
+Name: "prusapresets"; Description: "Add EmberCheck print presets to PrusaSlicer, based on the print profile selected there, e.g. ""0.20 mm NORMAL (0.4 mm nozzle) @CREALITY - EmberCheck Balanced"""; Check: PrusaFound
 Name: "startmenu"; Description: "Create Start menu shortcuts"
 
 [InstallDelete]
 ; Start menu folder of Bambu Print Optimizer 1.x
 Type: filesandordirs; Name: "{userprograms}\Print Optimizer"
 Type: files; Name: "{app}\presets_status.txt"
+Type: files; Name: "{app}\prusa_presets_status.txt"
 
 [Files]
 Source: "{#DistDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 Name: "{userprograms}\EmberCheck\EmberCheck"; Filename: "{app}\{#AppExe}"; Comment: "Optimize a sliced plate (.gcode.3mf)"; Tasks: startmenu
-Name: "{userprograms}\EmberCheck\Add Bambu Studio presets"; Filename: "{app}\{#AppExe}"; Parameters: "--install-presets --select"; Comment: "Choose printers and create or update the EmberCheck process presets in Bambu Studio"; Tasks: startmenu
+Name: "{userprograms}\EmberCheck\Add Bambu Studio presets"; Filename: "{app}\{#AppExe}"; Parameters: "--install-presets --select"; Comment: "Choose printers and create or update the EmberCheck process presets in Bambu Studio"; Tasks: startmenu; Check: BambuFound or not PrusaFound
+Name: "{userprograms}\EmberCheck\Add PrusaSlicer presets"; Filename: "{app}\{#AppExe}"; Parameters: "--install-prusa-presets"; Comment: "Create or update the EmberCheck print presets in PrusaSlicer for the print profile selected there"; Tasks: startmenu; Check: PrusaFound
 Name: "{userprograms}\EmberCheck\EmberCheck reports"; Filename: "{app}\{#AppExe}"; Parameters: "--open-reports"; Comment: "Open the reports folder"; Tasks: startmenu
 Name: "{userprograms}\EmberCheck\Uninstall EmberCheck"; Filename: "{uninstallexe}"; Tasks: startmenu
 
@@ -78,15 +83,18 @@ Filename: "{app}\{#AppExe}"; Parameters: "--open-reports"; Description: "Open th
 
 [UninstallRun]
 Filename: "{app}\{#AppExe}"; Parameters: "--remove-presets"; Flags: runhidden waituntilterminated; RunOnceId: "RemovePresets"
+Filename: "{app}\{#AppExe}"; Parameters: "--remove-prusa-presets"; Flags: runhidden waituntilterminated; RunOnceId: "RemovePrusaPresets"
 
 [UninstallDelete]
 Type: files; Name: "{app}\presets_manifest.json"
 Type: files; Name: "{app}\presets.log"
 Type: files; Name: "{app}\presets_*.log"
 Type: files; Name: "{app}\presets_status.txt"
+Type: files; Name: "{app}\prusa_presets_manifest.json"
+Type: files; Name: "{app}\prusa_presets_status.txt"
 
 [Messages]
-FinishedLabel=Setup has installed [name] on your computer.%n%nRestart Bambu Studio, then pick an EmberCheck process preset, for example "0.20mm H2S EmberCheck Balanced" (also EmberCheck Speed / EmberCheck Quality). Every slice with it is optimized automatically and a results card appears.%n%nReports are saved in Documents\EmberCheck\reports.
+FinishedLabel=Setup has installed [name] on your computer.%n%nRestart Bambu Studio or PrusaSlicer, then pick an EmberCheck preset, for example "0.20mm H2S EmberCheck Balanced" (also EmberCheck Speed / EmberCheck Quality). Every slice or export with it is optimized automatically and a results card appears.%n%nReports are saved in Documents\EmberCheck\reports.
 
 [Code]
 var
@@ -108,6 +116,33 @@ begin
       for I := 0 to GetArrayLength(Lines) - 1 do
         if Pos('bambu-studio.exe', Lowercase(Lines[I])) > 0 then
           Result := True;
+end;
+
+function PrusaRunning(): Boolean;
+var
+  ResultCode: Integer;
+  TmpFile: String;
+  Lines: TArrayOfString;
+  I: Integer;
+begin
+  Result := False;
+  TmpFile := ExpandConstant('{tmp}\tasks_prusa.txt');
+  if Exec(ExpandConstant('{cmd}'), '/C tasklist /FI "IMAGENAME eq prusa-slicer.exe" /NH > "' + TmpFile + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode) then
+    if LoadStringsFromFile(TmpFile, Lines) then
+      for I := 0 to GetArrayLength(Lines) - 1 do
+        if Pos('prusa-slicer.exe', Lowercase(Lines[I])) > 0 then
+          Result := True;
+end;
+
+{ PrusaSlicer keeps its profiles in %APPDATA%\PrusaSlicer (created when it is first started) }
+function PrusaFound(): Boolean;
+begin
+  Result := DirExists(ExpandConstant('{userappdata}\PrusaSlicer'));
+end;
+
+function BambuFound(): Boolean;
+begin
+  Result := DirExists(ExpandConstant('{userappdata}\BambuStudio'));
 end;
 
 function NextField(var S: String): String;
@@ -204,6 +239,13 @@ begin
   if CurStep = ssPostInstall then
   begin
     MigrateOldInstall();
+    if WizardIsTaskSelected('prusapresets') then
+    begin
+      if ExpandConstant('{param:PRUSABASE|}') <> '' then
+        RunEmberCheck('--install-prusa-presets --quiet --prusa-base "' + ExpandConstant('{param:PRUSABASE|}') + '"')
+      else
+        RunEmberCheck('--install-prusa-presets --quiet');
+    end;
     if not WizardIsTaskSelected('presets') then
       { keep older presets working: point them at EmberCheck.exe (PrintOptimizer.exe was removed) }
       RunEmberCheck('--install-presets --repoint-only --quiet')
@@ -243,6 +285,10 @@ begin
     while BambuRunning() do
       if MsgBox('Bambu Studio is running. Please close it so the new presets are picked up, then click Retry.'#13#10#13#10'Click Cancel to continue anyway (restart Bambu Studio afterwards).', mbInformation, MB_RETRYCANCEL) = IDCANCEL then
         Break;
+  if (CurPageID = wpSelectTasks) and WizardIsTaskSelected('prusapresets') then
+    while PrusaRunning() do
+      if MsgBox('PrusaSlicer is running. Please close it so the new presets are picked up, then click Retry.'#13#10#13#10'Click Cancel to continue anyway (restart PrusaSlicer afterwards).', mbInformation, MB_RETRYCANCEL) = IDCANCEL then
+        Break;
   if CurPageID = PrinterPage.ID then
   begin
     Sel := '';
@@ -272,15 +318,30 @@ var
   Status: AnsiString;
   Msg: String;
 begin
-  if (CurPageID = wpFinished) and WizardIsTaskSelected('presets') then
+  if (CurPageID = wpFinished) and (WizardIsTaskSelected('presets') or WizardIsTaskSelected('prusapresets')) then
   begin
-    if LoadStringFromFile(ExpandConstant('{app}\presets_status.txt'), Status) then
-      Msg := Trim(String(Status))
-    else
-      Msg := 'No EmberCheck presets were added (see presets.log in the install folder).';
+    Msg := '';
+    if WizardIsTaskSelected('presets') then
+    begin
+      if LoadStringFromFile(ExpandConstant('{app}\presets_status.txt'), Status) then
+        Msg := Trim(String(Status))
+      else
+        Msg := 'No EmberCheck presets were added (see presets.log in the install folder).';
+    end;
+    if WizardIsTaskSelected('prusapresets') then
+    begin
+      if Msg <> '' then Msg := Msg + #13#10#13#10;
+      if LoadStringFromFile(ExpandConstant('{app}\prusa_presets_status.txt'), Status) then
+        Msg := Msg + Trim(String(Status))
+      else
+        Msg := Msg + 'No PrusaSlicer presets were added (see presets.log in the install folder).';
+    end;
     WizardForm.FinishedLabel.Caption := 'Setup has installed EmberCheck on your computer.' + #13#10#13#10 + Msg + #13#10#13#10 +
       'Reports are saved in Documents\EmberCheck\reports.';
     WizardForm.FinishedLabel.AutoSize := False;
-    WizardForm.FinishedLabel.Height := ScaleY(170);
+    if WizardIsTaskSelected('prusapresets') then
+      WizardForm.FinishedLabel.Height := ScaleY(240)
+    else
+      WizardForm.FinishedLabel.Height := ScaleY(170);
   end;
 end;

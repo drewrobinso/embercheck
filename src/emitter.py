@@ -1,6 +1,6 @@
 """Write the optimised G-code and verify it against the original."""
 import math, re
-from gcode_model import GcodeFile, Kinematics, estimate_times, split_comment, parse_words
+from gcode_model import GcodeFile, Kinematics, estimate_times, split_comment, parse_words, BAMBU
 
 _F_RE = re.compile(r'(\s)F[-+]?(?:\d+\.?\d*|\.\d+)')
 
@@ -29,28 +29,28 @@ def set_S(text, S):
     return (code2.rstrip() + (' ' + com if com else '')) + nl
 
 
-def _harmless(ln):
+def _harmless(ln, D=BAMBU):
     """Lines that neither move the head nor change machine state: blank lines, comments, plane select."""
     t = ln.text.strip()
-    return ln.kind != 'motion' and (not t or (t.startswith(';') and not t.startswith('; WIPE_END')) or
+    return ln.kind != 'motion' and (not t or (t.startswith(';') and not t.startswith(D.wipe_end)) or
                                     t.split()[0] in ('G17', 'G18', 'G19', 'M73'))
 
 
-def _next_move_planned(seq, cnt, G, accplan):
+def _next_move_planned(seq, cnt, G, accplan, D=BAMBU):
     """True if every move of the wipe block that starts after seq[cnt] keeps the raised acceleration."""
     seen = False
     for q in seq[cnt + 1:cnt + 60]:
         ln = G[q]
-        if ln.text.startswith('; WIPE_END'): return seen
+        if ln.text.startswith(D.wipe_end): return seen
         if ln.kind == 'motion':
             if q not in accplan: return False
             seen = True
-        elif not _harmless(ln): return False
+        elif not _harmless(ln, D): return False
     return False
 
 
 def emit(opt, progress=None):
-    g = opt.g; G = g.lines
+    g = opt.g; G = g.lines; D = g.dialect
     feeds = {}; fanpol = {}
     for k, ev in enumerate(opt.opt):
         a = opt.L[k]['a']
@@ -93,12 +93,12 @@ def emit(opt, progress=None):
                 out.append('G1 F%s\n' % fmtF(ln.effF)); out_F = ln.effF; stats['f_inserted'] += 1
         # raised acceleration never leaks into another feature or into a protected (AMS / tool-change / timelapse) block
         if out_acc is not None and orig_acc is not None and abs(out_acc - orig_acc) > 0.5 and \
-                (ln.prot or ln.text.startswith('; FEATURE:') or ln.text.startswith('; CHANGE_LAYER') or
-                 (not ln.opt and ln.kind != 'accel' and not _harmless(ln) and not (ln.in_wipe and i in accplan)) or
-                 (ln.text.startswith('; WIPE_START') and not _next_move_planned(seq, cnt, G, accplan))):
+                (ln.prot or ln.text.startswith(D.feature) or ln.text.startswith(D.layer) or
+                 (not ln.opt and ln.kind != 'accel' and not _harmless(ln, D) and not (ln.in_wipe and i in accplan)) or
+                 (ln.text.startswith(D.wipe_start) and not _next_move_planned(seq, cnt, G, accplan, D))):
             # 1.4.0: comments, G17 and other non-motion lines no longer force a restore (they don't move the head);
             # any move we did not plan, any protected line and every feature / layer change still restore first.
-            out.append('M204 S%d\n' % int(round(orig_acc))); out_acc = orig_acc; stats['acc_restored'] += 1
+            out.append(D.accel_fmt % int(round(orig_acc))); out_acc = orig_acc; stats['acc_restored'] += 1
         if ins:
             for t in ins:
                 out.append(t)
@@ -114,11 +114,11 @@ def emit(opt, progress=None):
                 tgtA = wantA if wantA is not None else ln.accel
                 if wantA is not None: stats['acc_moves'] += 1
                 if tgtA is not None and out_acc is not None and abs(tgtA - out_acc) > 0.5:
-                    out.append('M204 S%d\n' % int(round(tgtA))); out_acc = tgtA
+                    out.append(D.accel_fmt % int(round(tgtA))); out_acc = tgtA
                     stats['acc_raised' if wantA is not None else ('acc_inserted' if ln.layer in reordered_layers else 'acc_restored')] += 1
             if ln.opt and ln.layer in reordered_layers:
                 if ln.is_ext and out_w is not None and abs(ln.width - out_w) > 1e-4:
-                    out.append('; LINE_WIDTH: %g\n' % ln.width); out_w = ln.width
+                    out.append(D.width_fmt % ln.width); out_w = ln.width
             if ln.opt:
                 bS = opt.boost.get(i)
                 if bS is not None and out_fan < bS - 0.5:
@@ -161,7 +161,7 @@ def emit(opt, progress=None):
         if ln.kind == 'accel':
             out_acc = ln.accel if ln.accel is not None else (ln.w.get('S', ln.w.get('P')) if ln.w else out_acc)
             orig_acc = out_acc
-        if 'LINE_WIDTH:' in text and text.startswith(';'):
+        if D.width_key in text and text.startswith(';'):
             try: out_w = float(text.split(':', 1)[1])
             except ValueError: pass
         while len(src) < len(out): src.append(None)

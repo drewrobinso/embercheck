@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """EmberCheck (formerly Bambu Print Optimizer) - free, local, Helio-style thermal check + speed/fan/travel optimiser
-for Bambu Studio G-code.
+for Bambu Studio G-code and (since 1.5) PrusaSlicer G-code for Marlin printers such as the Creality Ender 3 V2 Neo.
 
 Bambu Studio post-processing usage (Process > Others > Post-processing scripts):
     "C:\\Path\\To\\python.exe" "C:\\Path\\To\\embercheck.py" --goal balanced
-Bambu Studio appends the temporary G-code path as the last argument; the file is edited in place.
+PrusaSlicer (Print Settings > Output options > Post-processing scripts), same line.
+Both slicers append the temporary G-code path as the last argument; the file is edited in place.
 
 Standalone:
     python embercheck.py model.gcode -o model.opt.gcode
@@ -23,7 +24,7 @@ from project_info import REPO_URL  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.4.2'
+VERSION = '1.5.0'
 APP = 'EmberCheck'
 
 
@@ -124,18 +125,20 @@ def stamp_lines(k, st, g):
         'arcs: off (%s)' % (k.get('arcs_note') or 'off')
     lim = ('not slower than the original' if st.time_budget == 0 else
            ('+%g%%' % (100 * st.time_budget) if st.time_budget is not None else 'none, quality first'))
-    return ['%s %s - print optimizer for Bambu Studio (%s)' % (APP, VERSION, REPO_URL),
+    return ['%s %s - print optimizer for %s (%s)' % (APP, VERSION, g.dialect.slicer, REPO_URL),
             'date: %s' % datetime.datetime.now().astimezone().strftime('%Y-%m-%d %H:%M %z'),
             'goal: %s (time limit: %s)' % (st.goal, lim),
             'print time: %s [%s]' % (R.time_line(k['time_before_s'], k['time_after_s'], '-', '->'), k['time_source']),
             'by feature: %s' % saved,
             arcs,
-            'changes: %d feeds, %d fan, %d M204 raised, %d Z-hops / %d retracts skipped, %d overhang segments slowed, '
-            'M73 progress and remaining time updated' % (
+            'changes: %d feeds, %d fan, %d M204 raised, %d Z-hops / %d retracts skipped, %d overhang segments slowed, %s' % (
                 k['est'].get('f_changed', 0), k['est'].get('fan_changed', 0) + k['est'].get('fan_inserted', 0),
-                k['est'].get('acc_raised', 0), k.get('hops_skipped', 0), k.get('retracts_skipped', 0), k.get('overhangs_slowed', 0)),
+                k['est'].get('acc_raised', 0), k.get('hops_skipped', 0), k.get('retracts_skipped', 0), k.get('overhangs_slowed', 0),
+                'M73 progress and remaining time updated' if g.dialect.name == 'bambu' or k.get('m73_updated') else
+                'no M73 progress lines in the file'),
             'thermal model: hot layers %d -> %d, cold layers %d -> %d' % (k['hot_before'], k['hot_after'], k['cold_before'], k['cold_after']),
-            'checked: same layers, same extrusion per layer (exact), start/end/AMS/timelapse G-code unchanged',
+            ('checked: same layers, same extrusion per layer (exact), start/end/AMS/timelapse G-code unchanged' if g.dialect.name == 'bambu' else
+             'checked: same layers, same extrusion per layer (exact), start/end/custom G-code and %s footer unchanged' % g.dialect.slicer),
             'verify: EmberCheck.exe --check-stamp FILE.gcode|FILE.3mf  (docs/verify.md)']
 
 
@@ -184,10 +187,12 @@ def process_text(text, st, name, log, progress=noop):
         out, est, m73n, errs, metrics, ta = build()
         if left > 0 and ta > tb * (1 + st.time_budget):
             break
-    bt = None
-    for ln in g.raw_lines[:30]:
-        mm = re.search(r'model printing time:\s*([^;]+)', ln)
-        if mm: bt = mm.group(1).strip(); break
+    bt = g.slicer_time      # PrusaSlicer: '; estimated printing time (normal mode) = ...' in the footer
+    if bt is None:
+        for ln in g.raw_lines[:30]:
+            mm = re.search(r'model printing time:\s*([^;]+)', ln)
+            if mm: bt = mm.group(1).strip(); break
+    slicer = g.dialect.slicer
     hi = opt.mat['t_high']
     hot_b = sum(1 for e in opt.base if e.Tmax is not None and e.Tmax > hi)
     hot_a = sum(1 for e in opt.opt if e.Tmax is not None and e.Tmax > hi)
@@ -203,11 +208,11 @@ def process_text(text, st, name, log, progress=noop):
     fanl = sum(1 for d in dec if 'fan' in d) + dec.count('hot-residual')
     pm = g.config.get('printer_model', '') or ''
     arcs_why = ('%s does its own curve planning, Bambu Studio turns arc fitting off for it too' % (re.sub(r'^Bambu Lab ', '', pm) or 'this printer')
-                if any(m in pm for m in CURVE_PLANNING_MODELS) else 'the printer profile has arc fitting off')
+                if any(m in pm for m in CURVE_PLANNING_MODELS) and g.dialect.name == 'bambu' else 'the printer profile has arc fitting off')
     # raw times: Bambu Studio's own estimate from the header, scaled by our model's new/old ratio (one model for both)
     bambu_s = R.parse_hms(bt)
     scale = (bambu_s / tb) if (bambu_s and tb) else 1.0
-    t_src = 'Bambu Studio estimate, scaled by EmberCheck\'s motion model' if bambu_s and tb else 'EmberCheck\'s motion model'
+    t_src = '%s estimate, scaled by EmberCheck\'s motion model' % slicer if bambu_s and tb else 'EmberCheck\'s motion model'
     disp_b, disp_a = (bambu_s, ta * scale) if bambu_s and tb else (tb, ta)
     feat_s = {'acceleration': getattr(opt, 'acc_saved', 0.0) * scale,
               'hop/retract skip': (hs.get('time_saved', 0.0) if st.hops else 0.0) * scale,
@@ -236,8 +241,10 @@ def process_text(text, st, name, log, progress=noop):
             st.arc_tol or min(0.05, max(0.005, g.cfg('resolution', 0.01) or 0.01))) if getattr(opt, 'arcs_on', False) else
          'Arc fitting off (%s)' % (arcs_why if st.arcs == 'auto' else 'turned off')),
         '%d M73 remaining-time values updated' % m73n,
-        'Nothing else touched: no temperatures, extrusion per layer exactly the same (skipped retract/un-retract pairs and arcs keep the exact E sum), no start/end/AMS/timelapse G-code.']
-    summary = {'t_before': tb, 't_after': ta, 'dt_pct': 100 * (ta - tb) / tb if tb else 0, 'bambu_time': bt,
+        'Nothing else touched: no temperatures, extrusion per layer exactly the same (skipped retract/un-retract pairs and arcs keep the exact E sum), no start/end/AMS/timelapse G-code.'
+        if g.dialect.name == 'bambu' else
+        'Nothing else touched: no temperatures, extrusion per layer exactly the same (skipped retract/un-retract pairs and arcs keep the exact E sum), no start/end/custom G-code, %s footer and config unchanged.' % slicer]
+    summary = {'m73_updated': m73n, 't_before': tb, 't_after': ta, 'dt_pct': 100 * (ta - tb) / tb if tb else 0, 'bambu_time': bt,
                'goal': st.goal, 'time_budget_pct': None if st.time_budget is None else 100 * st.time_budget,
                'acc_saved_s': getattr(opt, 'acc_saved', 0.0), 'acc_saved_pct': 100 * getattr(opt, 'acc_saved', 0.0) / tb if tb else 0,
                'acc_layers': getattr(opt, 'acc_layers', 0), 'acc_moves': est.get('acc_moves', 0),
@@ -261,7 +268,8 @@ def process_text(text, st, name, log, progress=noop):
                'accel_share': cat['Extrusion accel/decel loss'] / ext_t if ext_t else 0,
                'changes': changes, 'errors': errs, 'metrics': metrics, 'seconds': time.time() - t0,
                'travel': opt.travel, 'reorder': opt.reorder_stats, 'ov': getattr(opt, 'ov_stats', {}),
-               'material': opt.mat_name, 'layers': opt.nl, 'est': est}
+               'material': opt.mat_name, 'layers': opt.nl, 'est': est, 'slicer': slicer,
+               'printer_model': pm}
     summary['n_edits'] = est['f_changed'] + est['fan_changed'] + est['fan_inserted'] + est['f_inserted'] + est['acc_inserted'] + \
         est.get('acc_raised', 0) + est.get('lines_skipped', 0) + est.get('arcs', 0) + opt.travel['fixed'] + (1 if opt.order and st.reorder else 0)
     if out and not errs and summary['n_edits']:
@@ -430,6 +438,56 @@ def list_printers(a):
     return 0
 
 
+def prusa_presets_cmd(a):
+    """--install-prusa-presets / --remove-prusa-presets: EmberCheck print presets in PrusaSlicer (see prusa_presets.py)."""
+    import prusa_presets as pp
+    manifest = os.path.join(app_dir(), 'prusa_presets_manifest.json')
+    msgs = ['--- %s %s %s' % (datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S'), VERSION,
+                                '--remove-prusa-presets' if a.remove_prusa_presets else '--install-prusa-presets')]
+    stats = {}
+    def log(m):
+        msgs.append(m); eprint(m)
+    try:
+        if a.remove_prusa_presets:
+            pp.remove(a.prusa_dir, manifest, log, backup_dir=os.path.join(app_dir(), 'preset_backups', 'prusaslicer'))
+        else:
+            if getattr(sys, 'frozen', False):
+                line = pp.post_process_line(sys.executable, None, ('--goal {goal} ' + a.pp_args).strip())
+            else:
+                exe = sys.executable
+                w = os.path.join(os.path.dirname(exe), 'pythonw.exe')
+                line = pp.post_process_line(w if os.path.exists(w) else exe, os.path.abspath(__file__), ('--goal {goal} ' + a.pp_args).strip())
+            bases = [b.strip() for b in a.prusa_base.split(';') if b.strip()] if a.prusa_base else None
+            pp.install(line, a.prusa_dir, manifest, log, bases=bases, version=VERSION, stats=stats)
+            if pp.prusa_running():
+                log('PrusaSlicer is running - restart it to see the new presets.')
+    except Exception as ex:
+        log('PrusaSlicer preset step failed: %s' % ex)
+        stats['status'] = 'error'
+    if not a.remove_prusa_presets:
+        text = pp.status_text(stats)
+        try:   # read by the installer's finish page
+            with open(os.path.join(app_dir(), 'prusa_presets_status.txt'), 'w', encoding='utf-8') as f:
+                f.write(text + '\n')
+        except OSError:
+            pass
+        if not a.quiet and gui_available():   # Start menu "Add PrusaSlicer presets"
+            try:
+                import tkinter as tk
+                from tkinter import messagebox
+                r = tk.Tk(); r.withdraw(); _icon(r)
+                (messagebox.showinfo if stats.get('status') == 'ok' else messagebox.showwarning)('EmberCheck', text)
+                r.destroy()
+            except Exception:
+                pass
+    try:
+        with open(os.path.join(app_dir(), 'presets.log'), 'a', encoding='utf-8') as f:
+            f.write('\n'.join(msgs) + '\n')
+    except OSError:
+        pass
+    return 0    # never fail the installer / uninstaller because of presets
+
+
 def presets_cmd(a):
     import bambu_presets as bp
     manifest = os.path.join(app_dir(), 'presets_manifest.json')
@@ -501,6 +559,19 @@ def presets_cmd(a):
     return 0    # never fail the installer / uninstaller because of presets
 
 
+def sniff_slicer(path):
+    """'PrusaSlicer' or 'Bambu Studio' from the first lines of a .gcode file (cheap, for window titles)."""
+    try:
+        if path and not path.lower().endswith('.3mf'):
+            with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                head = f.read(4096)
+            if '; generated by PrusaSlicer' in head:
+                return 'PrusaSlicer'
+    except OSError:
+        pass
+    return 'Bambu Studio'
+
+
 def run_job(a, st, src, rpath, stem, ts, log, progress):
     """Process one file. Returns card data dict. Raises Cancelled before anything is written."""
     is3mf = src.lower().endswith('.3mf')
@@ -560,15 +631,20 @@ def run_job(a, st, src, rpath, stem, ts, log, progress):
         log('wrote %s' % outp)
     progress.cancel_flag = None  # written: cancelling is no longer possible
     progress('write', 1.0)
-    card = card_data(summ, pp_name and 'Bambu Studio slice' or os.path.basename(src), rpath, a.dry_run)
-    card['from_bambu'] = bool(pp_name)
+    slicer = summ.get('slicer') or sniff_slicer(src)
+    # PrusaSlicer: SLIC3R_PP_OUTPUT_NAME is the final export path, so the card shows the real file name
+    shown = (os.path.basename(pp_name.replace('\\', '/')) if slicer == 'PrusaSlicer' else '%s slice' % slicer) if pp_name else os.path.basename(src)
+    card = card_data(summ, shown, rpath, a.dry_run)
+    card['slicer'] = slicer
+    # Bambu Studio waits for the card ("Continue to Print"); PrusaSlicer has already finished exporting
+    card['from_bambu'] = bool(pp_name) and slicer == 'Bambu Studio'
     if new is not None and not a.dry_run and summ.get('n_edits'):
-        log_run('%s%s' % (a.output or src, (' (Bambu Studio: %s)' % pp_name) if pp_name else ''), card)
+        log_run('%s%s' % (a.output or src, (' (%s: %s)' % (slicer, pp_name)) if pp_name else ''), card)
     return card
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(description='EmberCheck ' + VERSION + ' - print optimizer for Bambu Studio')
+    ap = argparse.ArgumentParser(description='EmberCheck ' + VERSION + ' - print optimizer for Bambu Studio and PrusaSlicer')
     ap.add_argument('input', nargs='?', help='G-code (.gcode) or sliced project (.gcode.3mf / .3mf)')
     ap.add_argument('-o', '--output', help='output file (default: in place for .gcode, *.optimized.gcode.3mf for 3mf)')
     ap.add_argument('--report', help='HTML report path')
@@ -604,6 +680,11 @@ def main(argv=None):
     ap.add_argument('--list-printers', metavar='FILE', help=argparse.SUPPRESS)
     ap.add_argument('--check-stamp', metavar='GCODE', help='check the EmberCheck stamp of an optimized .gcode / .gcode.3mf (body SHA-256)')
     ap.add_argument('--remove-presets', action='store_true', help='remove the presets created by --install-presets')
+    ap.add_argument('--install-prusa-presets', action='store_true',
+                    help='create "<print profile> - EmberCheck <Goal>" print presets in PrusaSlicer (based on the selected print profile)')
+    ap.add_argument('--prusa-base', default='', help='with --install-prusa-presets: base print profile(s), e.g. "0.20 mm NORMAL (0.4 mm nozzle) @CREALITY"')
+    ap.add_argument('--remove-prusa-presets', action='store_true', help='remove the presets created by --install-prusa-presets')
+    ap.add_argument('--prusa-dir', help=argparse.SUPPRESS)
     ap.add_argument('--pp-args', default='', help='extra arguments added to the presets\' post-processing line (each preset already has its own --goal)')
     ap.add_argument('--bambu-dir', help=argparse.SUPPRESS)
     ap.add_argument('--quiet', action='store_true', help=argparse.SUPPRESS)
@@ -615,7 +696,7 @@ def main(argv=None):
         problems = []
         if not HAVE_GEOM:
             problems.append('geometry: %s' % GEOM_ERROR)
-        for mod in ('tkinter', 'ui', 'bambu_presets', 'report', 'project_info', 'stamp'):
+        for mod in ('tkinter', 'ui', 'bambu_presets', 'prusa_presets', 'report', 'project_info', 'stamp'):
             try:
                 __import__(mod)
             except Exception as ex:
@@ -643,6 +724,8 @@ def main(argv=None):
         return 0 if ok else 1
     if a.install_presets or a.remove_presets:
         return presets_cmd(a)
+    if a.install_prusa_presets or a.remove_prusa_presets:
+        return prusa_presets_cmd(a)
     if a.open_reports:
         d = a.report_dir or default_report_dir(); os.makedirs(d, exist_ok=True)
         _open_path(d)
@@ -667,8 +750,9 @@ def main(argv=None):
     stem = os.path.basename(pp_name or src)
     for ext in ('.gcode.3mf', '.3mf', '.gcode'):
         if stem.lower().endswith(ext): stem = stem[:-len(ext)]; break
+    slicer = sniff_slicer(src)
     if stem.startswith('.') or not stem.strip('.'):
-        stem = 'bambu_slice'   # Bambu Studio passes its hidden temp file (e.g. .12345.0.gcode)
+        stem = 'bambu_slice' if slicer == 'Bambu Studio' else 'prusaslicer_slice'   # hidden temp file (e.g. .12345.0.gcode)
     rdir = a.report_dir or (os.path.dirname(os.path.abspath(a.output)) if a.output else
                             (default_report_dir() if (pp_name or not is3mf) and not a.report else os.path.dirname(os.path.abspath(src))))
     os.makedirs(rdir, exist_ok=True)
@@ -696,10 +780,10 @@ def main(argv=None):
     try:
         if use_gui:
             import ui
-            title = 'Bambu Studio slice' if pp_name else os.path.basename(src)
+            title = ('%s slice' % slicer) if pp_name else os.path.basename(src)
             def work(cb, cancel_flag):
                 return run_job(a, st, src, rpath, stem, ts, log, Progress(cb, cancel_flag))
-            card, err, cancelled, pos = ui.ProgressWindow(title).run(work)
+            card, err, cancelled, pos = ui.ProgressWindow(title, slicer).run(work)
             if isinstance(err, Cancelled):
                 cancelled = True; err = None
         else:
@@ -713,7 +797,7 @@ def main(argv=None):
         return 0
     if err is not None:
         log('FAILED, G-code left unchanged: %s\n%s' % (err, ''.join(traceback.format_exception(type(err), err, err.__traceback__))))
-        card = {'status': 'failed', 'name': 'Bambu Studio slice' if pp_name else os.path.basename(src), 'errors': [str(err)], 'report': None,
+        card = {'status': 'failed', 'name': ('%s slice' % slicer) if pp_name else os.path.basename(src), 'errors': [str(err)], 'report': None,
                 'recommendations': [['Log', 'Details are in optimizer.log in ' + os.path.dirname(logpath)]]}
     if card is not None:
         card['log_dir'] = os.path.dirname(logpath)
