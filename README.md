@@ -4,6 +4,7 @@
 
 Free, open-source (MIT), local "Helio-style" thermal check and speed/fan optimizer for Bambu Studio G-code, for every Bambu Lab printer. Windows installer, no Python needed. A Python zip is also available for macOS (preview, untested) and other systems; see [docs/macos.md](docs/macos.md).
 
+
 Repository: https://github.com/drewrobinso/embercheck
 
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-support-FFDD00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/drewrobinso)
