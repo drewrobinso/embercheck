@@ -40,3 +40,4 @@ jobs:
           python src/embercheck.py --self-test
           python test/test_presets.py
           python test/test_paths.py
+          python test/test_toolchange.py

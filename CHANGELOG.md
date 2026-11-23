@@ -4,6 +4,14 @@ All notable changes. Versions follow `VERSION` in `src/embercheck.py` (`src/bamb
 
 ## [Unreleased] — macOS preview
 
+### Fixed
+- **H2D / X2D: files that switch to the second nozzle are no longer refused** ([#1](https://github.com/drewrobinso/embercheck/issues/1)). After a nozzle change (e.g. X2D main → aux nozzle) every file failed the safety check with `extruding while retracted (-2.000)` and was left unchanged. The G-code was fine: Bambu Studio leaves the old nozzle parked with its 2 mm toolchange retract and only de-retracts it when that nozzle prints again, while the new nozzle starts un-retracted. EmberCheck's checker kept one retraction counter for the whole printer, so it carried the old nozzle's −2 mm over to the new one. Retraction is now tracked per filament path, the same way Bambu Studio's G-code writer does it (`Extruder::retracted_slot_id`): per extruder from `filament_map`, per hotend (`H` on the `T` line, or `filament_nozzle_map`) on printers with `handle_hotend_as_extruder`. Firmware codes such as `T1000`/`T65535` do not switch the slot. The check itself is unchanged and still catches a nozzle that prints without its de-retract.
+- Single-nozzle printers keep one shared counter (all filaments map to the same slot), so their output is byte-identical to 1.4.2: the six reference prints × three goals were compared against `main`.
+- Test build **1.4.3-x2d-test** (unsigned, branch `X2D---Aux-Nozzle-Test`, not released). The Windows version resource uses the numeric part (1.4.3) for test versions with a suffix.
+
+### Tests
+- `test/test_toolchange.py` (also in CI): synthetic nozzle/filament-change cases for single-nozzle, dual-nozzle and per-hotend printers, including real retraction errors that must still be caught; and all three goals end to end on a real Bambu Studio 02.09.01.70 X2D slice (stock v02.09.01.70 profiles, PETG, main nozzle → aux nozzle at 4 mm → main at 8 mm, `test/fixtures/x2d_aux_nozzle_switch.gcode.gz`). Before the fix every goal failed on it with `extruding while retracted (-2.000)`, the same error as in the report; a real H2D slice (main ↔ second extruder) failed and now passes the same way. All outputs pass `test/verify.py`.
+
 ### Added
 - macOS path support: Bambu Studio's config dir (`~/Library/Application Support/BambuStudio`) and system profiles in the app bundle (`/Applications/BambuStudio.app/Contents/Resources/profiles`), plus EmberCheck's own data dir (`~/Library/Application Support/EmberCheck`). The results card and other windows no longer require a `DISPLAY` variable on macOS (Aqua).
 - [docs/macos.md](docs/macos.md): how to run the Python zip on macOS (Python 3, the Bambu Studio post-processing script line, Gatekeeper/quarantine, `--install-presets` / `scripts/install_macos.sh`). macOS is an untested preview; there is no Mac installer yet.

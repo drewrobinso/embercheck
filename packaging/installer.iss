@@ -5,6 +5,12 @@
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
+; numeric part for the Windows version resource (test builds like 1.4.3-x2d-test -> 1.4.3)
+#if Pos("-", AppVersion) > 0
+  #define NumVersion Copy(AppVersion, 1, Pos("-", AppVersion) - 1)
+#else
+  #define NumVersion AppVersion
+#endif
 #ifndef DistDir
   #define DistDir "..\dist\EmberCheck"
 #endif
@@ -24,10 +30,10 @@ AppVerName={#AppName} {#AppVersion}
 AppPublisher=Andrew Robinson
 AppPublisherURL={#RepoUrl}
 AppSupportURL={#RepoUrl}/issues
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#NumVersion}
 VersionInfoTextVersion={#AppVersion}
 VersionInfoProductName={#AppName}
-VersionInfoProductVersion={#AppVersion}
+VersionInfoProductVersion={#NumVersion}
 VersionInfoProductTextVersion={#AppVersion}
 VersionInfoCompany=Andrew Robinson
 VersionInfoCopyright=Copyright (c) 2026 Andrew Robinson. MIT License.

@@ -61,6 +61,7 @@ jobs:
           python -m py_compile (Get-ChildItem src\*.py).FullName
           python src\embercheck.py --self-test
           python test\test_presets.py
+          python test\test_toolchange.py
 
       - name: Build app (PyInstaller, windowed one-folder)
         run: python -m PyInstaller packaging\EmberCheck.spec --noconfirm --clean --distpath dist --workpath build\pyi

@@ -25,7 +25,7 @@ from project_info import REPO_URL  # noqa: E402
 import report as R  # noqa: E402
 from progress import Progress, Cancelled, noop  # noqa: E402
 
-VERSION = '1.4.2'
+VERSION = '1.4.3-x2d-test'
 APP = 'EmberCheck'
 
 

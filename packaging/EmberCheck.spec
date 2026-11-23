@@ -6,7 +6,7 @@ SRC = os.path.join(ROOT, 'src')
 VERSION = re.search(r"^VERSION = '([^']+)'", open(os.path.join(SRC, 'embercheck.py'), encoding='utf-8').read(), re.M).group(1)
 
 # Windows version resource (shown in file Properties and used by SignPath / SmartScreen metadata)
-vt = tuple(int(x) for x in (VERSION.split('.') + ['0'] * 4)[:4])
+vt = tuple(int(x) for x in (re.match(r'\d+(?:\.\d+)*', VERSION).group(0).split('.') + ['0'] * 4)[:4])  # 1.4.3-x2d-test -> (1, 4, 3, 0)
 vfile = os.path.join(ROOT, 'build', 'version_info.txt')
 os.makedirs(os.path.dirname(vfile), exist_ok=True)
 open(vfile, 'w', encoding='utf-8').write(open(os.path.join(SPECPATH, 'version_info.tmpl'), encoding='utf-8').read()

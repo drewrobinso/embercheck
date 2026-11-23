@@ -98,6 +98,22 @@ class GcodeFile:
 
         x = y = z = 0.0; F = 1800.0; accel = 10000.0; feature = None; width = 0.4; fan = 0.0
         rel_e = True; absxyz = True; r = 0.0
+        # Retraction is tracked per filament path, the way Bambu Studio's G-code writer does it
+        # (Extruder::retracted_slot_id): one slot per extruder from filament_map, or per hotend on
+        # machines that handle hotends as extruders. On dual-nozzle printers (H2D, X2D) the old
+        # nozzle stays parked retracted across a nozzle change and is only de-retracted when that
+        # nozzle is used again, so a single shared counter would see the new nozzle as retracted.
+        # Single-nozzle printers map every filament to slot 0, which is the old single counter.
+        fil_map = self._int_list('filament_map')
+        noz_map = self._int_list('filament_nozzle_map')
+        hotend_slots = (self.cfg('handle_hotend_as_extruder', 0) or 0) >= 1
+        def tool_slot(t, h):
+            if hotend_slots:
+                if h is not None and h >= 0: return int(h)
+                if t < len(noz_map) and noz_map[t] >= 0: return noz_map[t]
+            if t < len(fil_map) and fil_map[t] >= 1: return fil_map[t] - 1
+            return 0
+        slot = 0; parked = {}
         protect = None  # name of protected span
         in_wipe = False
         layer = -1; lz = 0.0; lh = 0.2
@@ -111,7 +127,7 @@ class GcodeFile:
                 layer = next_layer; next_layer += 1
                 self.layer_z.append(None); self.layer_h.append(None)
             if ln.i == end_start: layer = -1
-            if ln.i == self.body_start: r = 0.0
+            if ln.i == self.body_start: r = 0.0; parked = {}
             in_body = self.body_start <= ln.i < self.body_end
             ln.layer = layer if in_body else -1
             ln.r_before = r
@@ -188,6 +204,13 @@ class GcodeFile:
                     w = parse_words(code[3:])
                     if 'X' in w or 'Y' in w or 'Z' in w:
                         if in_body and protect is None: raise UnsupportedGcode('G92 XYZ offset in print body is not supported.')
+                elif cmd[:1] == 'T' and cmd[1:].isdigit():
+                    t = int(cmd[1:])
+                    if t < 255:  # T255/T1000/T65535 etc. are firmware/maintenance codes, not filament selects
+                        w = parse_words(code[len(cmd):])
+                        ns = tool_slot(t, w.get('H'))
+                        if ns != slot:
+                            parked[slot] = r; slot = ns; r = parked.pop(ns, 0.0)
                 elif cmd in ('M620',) and code.upper().startswith('M620 S'):
                     protect = protect or 'filament_change'
                 elif cmd == 'M622':
@@ -215,6 +238,15 @@ class GcodeFile:
             if self.layer_z[k] is None: self.layer_z[k] = lastz + (self.layer_h[k] or 0.2)
             if self.layer_h[k] is None: self.layer_h[k] = self.layer_z[k] - lastz
             lastz = self.layer_z[k]
+
+    def _int_list(self, key):
+        v = self.config.get(key)
+        if not v: return []
+        out = []
+        for p in v.replace(';', ',').split(','):
+            try: out.append(int(float(p.strip().strip('"'))))
+            except ValueError: return []
+        return out
 
     def layer_range(self, k):
         a = self.layer_starts[k]
